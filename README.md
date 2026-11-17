@@ -30,3 +30,13 @@ og der sendes intet til ClickUp.
 | `POST /api/opsig` `{ kundeId, aftaleId, varighed, stop, tilsendHjemmeside }` | `{ ok, url? }` |
 
 Fejl svares som `{ fejl, kode }` med fejlkoder `OF-xxx`.
+
+## Worker
+
+Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigelsesformular`
+(Workers & Pages > opsigelsesformular > Edit code). Den skal have to hemmeligheder:
+
+- `CLICKUP_TOKEN`: ClickUp API-token
+- `SESSION_SECRET`: lang tilfældig tekst (fx `openssl rand -hex 32`)
+
+Lige nu skriver "Opsig" kun en kommentar på kundeopgaven. Automatiseringerne i ClickUp kommer bagefter.
