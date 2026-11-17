@@ -17,6 +17,7 @@ const CFG = {
   KUNDER_LIST: '900800029468',
   KV_KUNDER: 'kunder-v2',       // supportformularens nøgle (læses kun, skrives aldrig herfra)
   GENFAK_TYPE_ID: 1008,         // opgavetypen "Genfak" = én aftale
+  TAG_OPSAGT: '🪦',             // findes i forvejen i ClickUp; sættes på opsagte Genfak-opgaver ved siden af "udløber xx/yy"
   CACHE_MINUTTER: 10,
   CLICKUP_URL: 'https://bestcrm.clickup.com',
   F: {
@@ -280,6 +281,7 @@ function tilAftale(t, reserve) {
     produkter: produkter(t, reserve),
     vaerdi: vaerdi !== null && vaerdi !== '' ? Number(vaerdi) : null,
     udloeb: deadline ? Number(deadline) : null,
+    opsagt: (t.tags || []).some((x) => x.name === CFG.TAG_OPSAGT),
     url: cuLink(t.url),
   };
 }
@@ -318,7 +320,8 @@ async function aftaler(env, kundeId) {
 }
 
 // ---------- Opsig ----------
-// Indtil automatiseringerne er besluttet, skrives opsigelsen kun som en kommentar på kundeopgaven.
+// 1. Hver valgt Genfak-opgave får tagget 🪦 (de andre tags, fx "udløber 26/27", bliver stående).
+// 2. En samlet kommentar skrives på kundeopgaven.
 
 const erHosting = (navn) => /^hos\+?$|hosting/i.test(String(navn).trim()); // HOS og HOS+, ikke H0S (nul)
 
@@ -335,8 +338,16 @@ async function opsig(env, bruger, b) {
   const aftaler = ider.map((id) => opgaver.find((o) => o.id === id));
   if (aftaler.some((o) => !o)) throw fejl('En af aftalerne hører ikke til kunden. Genindlæs siden og prøv igen.', 400, 'OF-401');
   const valgte = aftaler.map((o) => tilAftale(o, reserve)).sort((x, y) => (x.udloeb || Infinity) - (y.udloeb || Infinity));
+  if (valgte.some((a) => a.opsagt)) throw fejl('En af aftalerne er allerede opsagt (🪦). Genindlæs siden.', 400, 'OF-402');
   const hosting = valgte.some((a) => a.produkter.some((p) => erHosting(p.navn)));
   if (hosting && typeof b.tilsendHjemmeside !== 'boolean') throw fejl('Vælg om kunden skal have tilsendt hjemmesiden.', 400, 'OF-400');
+
+  // 1. Tag 🪦 på hver aftale. Lykkes ingen, stoppes der her, så der ikke skrives en kommentar om noget der ikke skete.
+  const tagSti = (id) => `/task/${id}/tag/${encodeURIComponent(CFG.TAG_OPSAGT)}`;
+  const tagResultat = await Promise.allSettled(valgte.map((a) => cu(env, tagSti(a.id), { method: 'POST' })));
+  const tagFejl = valgte.filter((_, i) => tagResultat[i].status === 'rejected');
+  tagResultat.forEach((r, i) => r.status === 'rejected' && console.error('OF-306', valgte[i].id, r.reason.detalje || r.reason.message));
+  if (tagFejl.length === valgte.length) throw fejl('Aftalerne kunne ikke markeres som opsagt i ClickUp. Intet er ændret.', 502, 'OF-306', tagResultat[0].reason.detalje);
 
   const dato = (ms) => new Date(ms).toLocaleDateString('da-DK', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Copenhagen' });
   const navn = (a) => a.produkter.map((p) => p.navn).join(', ') || a.navn;
@@ -353,11 +364,26 @@ async function opsig(env, bruger, b) {
     comment.push({ text: `• ${navn(a)}: stopper ${stopper(a)} ` }, { text: 'Åbn', attributes: { link: a.url } }, { text: '\n' });
   }
   comment.push({ text: '\n' + afslut.join('\n') + '\n\n' }, { text: `Registreret af ${bruger.navn} i opsigelsesformularen.`, attributes: { italic: true } }, { text: '\n' });
+  if (tagFejl.length) comment.push({ text: `\n⚠️ Fik ikke 🪦: ${tagFejl.map(navn).join(', ')}. Sæt tagget i hånden.\n` });
+
+  // 2. Kommentar. Tags er sat på dette tidspunkt, så en fejl her stopper ikke opsigelsen.
+  let kommentarFejl = null;
   try {
-    await cu(env, `/task/${kunde.id}/comment`, { method: 'POST', body: JSON.stringify({ comment, notify_all: false }) });
-  } catch {
-    const tekst = [titel, ...valgte.map((a) => `• ${navn(a)}: stopper ${stopper(a)} (${a.url})`), '', ...afslut, '', `Registreret af ${bruger.navn} i opsigelsesformularen.`].join('\n');
-    await cu(env, `/task/${kunde.id}/comment`, { method: 'POST', body: JSON.stringify({ comment_text: tekst, notify_all: false }) });
+    try {
+      await cu(env, `/task/${kunde.id}/comment`, { method: 'POST', body: JSON.stringify({ comment, notify_all: false }) });
+    } catch {
+      const tekst = [titel, ...valgte.map((a) => `• ${navn(a)}: stopper ${stopper(a)} (${a.url})`), '', ...afslut, '', `Registreret af ${bruger.navn} i opsigelsesformularen.`,
+        ...(tagFejl.length ? ['', `⚠️ Fik ikke 🪦: ${tagFejl.map(navn).join(', ')}. Sæt tagget i hånden.`] : [])].join('\n');
+      await cu(env, `/task/${kunde.id}/comment`, { method: 'POST', body: JSON.stringify({ comment_text: tekst, notify_all: false }) });
+    }
+  } catch (e) {
+    kommentarFejl = 'OF-307';
+    console.error('OF-307', kunde.id, e.detalje || e.message);
   }
-  return { ok: true, antal: valgte.length };
+  return {
+    ok: true,
+    antal: valgte.length,
+    tagFejl: tagFejl.map((a) => ({ id: a.id, navn: navn(a), url: a.url })),
+    kommentarFejl,
+  };
 }

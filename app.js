@@ -163,16 +163,22 @@ function tegnAftaler() {
     opdaterAfhaengige(); return;
   }
   // Én linje pr. aftale, tidligste udløb først. Man kan vælge flere.
-  const sorteret = [...a].sort((x, y) => (x.udloeb || Infinity) - (y.udloeb || Infinity));
-  const alleValgt = S.valgte.length === a.length;
-  rod.innerHTML = `${a.length > 1 ? `<button type="button" class="link vaelg-alle" id="vaelgAlle">${alleValgt ? 'Fravælg alle' : 'Vælg alle'}</button>` : ''}
+  // Allerede opsagte (🪦) står nederst og kan ikke vælges igen
+  const sorteret = [...a].sort((x, y) => (Number(!!x.opsagt) - Number(!!y.opsagt)) || ((x.udloeb || Infinity) - (y.udloeb || Infinity)));
+  const aktive = sorteret.filter((x) => !x.opsagt);
+  if (!aktive.length) {
+    rod.innerHTML = `<p class="forhaand advarsel-lys">Alle kundens aftaler er allerede opsagt (🪦).</p>`;
+    opdaterAfhaengige(); return;
+  }
+  const alleValgt = S.valgte.length === aktive.length;
+  rod.innerHTML = `${aktive.length > 1 ? `<button type="button" class="link vaelg-alle" id="vaelgAlle">${alleValgt ? 'Fravælg alle' : 'Vælg alle'}</button>` : ''}
   <div class="aftaleliste" role="group" aria-label="Kundens aftaler">${sorteret.map((x) => {
     const valgt = S.valgte.some((v) => v.id === x.id);
     const s = saesonKlasse(x.udloeb);
-    return `<label class="aftalekort${valgt ? ' valgt' : ''}">
-      <input type="checkbox" name="aftale" value="${esc(x.id)}"${valgt ? ' checked' : ''}>
+    return `<label class="aftalekort${valgt ? ' valgt' : ''}${x.opsagt ? ' opsagt' : ''}"${x.opsagt ? ' title="Allerede opsagt"' : ''}>
+      <input type="checkbox" name="aftale" value="${esc(x.id)}"${valgt ? ' checked' : ''}${x.opsagt ? ' disabled' : ''}>
       <span class="produkter">${(x.produkter || []).map((p) => `<span class="produkt" data-farve="${gyldigFarve(p.farve)}">${esc(p.navn)}</span>`).join('') || `<b>${esc(x.navn)}</b>`}</span>
-      <span class="udloeb ${s.klasse}" title="${esc(s.titel)}">${x.udloeb ? esc(kortDato(x.udloeb)) : 'Ingen udløbsdato'}</span>
+      ${x.opsagt ? '<span class="udloeb">🪦 Opsagt</span>' : `<span class="udloeb ${s.klasse}" title="${esc(s.titel)}">${x.udloeb ? esc(kortDato(x.udloeb)) : 'Ingen udløbsdato'}</span>`}
       <span class="vaerdi">${esc(kr(x.vaerdi) || '')}</span>
       ${x.url ? `<a class="link" href="${esc(x.url)}" target="_blank" rel="noopener" aria-label="Åbn aftalen i ClickUp">${IKON_UD}</a>` : '<span class="link"></span>'}
     </label>`;
@@ -184,11 +190,11 @@ function tegnAftaler() {
     S.valgte = sorteret.filter((x) => ider.has(x.id));
     cb.closest('.aftalekort').classList.toggle('valgt', cb.checked);
     const alle = $('#vaelgAlle');
-    if (alle) alle.textContent = S.valgte.length === a.length ? 'Fravælg alle' : 'Vælg alle';
+    if (alle) alle.textContent = S.valgte.length === aktive.length ? 'Fravælg alle' : 'Vælg alle';
     opdaterAfhaengige();
   }));
   const alle = $('#vaelgAlle');
-  if (alle) alle.onclick = () => { S.valgte = S.valgte.length === a.length ? [] : [...sorteret]; tegnAftaler(); };
+  if (alle) alle.onclick = () => { S.valgte = S.valgte.length === aktive.length ? [] : [...aktive]; tegnAftaler(); };
   opdaterAfhaengige();
 }
 
@@ -288,7 +294,7 @@ $('#opsig').addEventListener('click', async () => {
     AFTALE_CACHE.delete(data.kundeId); // kundens aftaler kan have ændret sig
     visKvittering(d, data);
   } catch (e) {
-    const brugerfejl = ['OF-400', 'OF-401'].includes(e.kode);
+    const brugerfejl = ['OF-400', 'OF-401', 'OF-402'].includes(e.kode);
     fejl.textContent = visFejl(e) + (brugerfejl ? '' : ' Prøv igen, eller giv besked med fejlkoden, hvis det fortsætter.');
   } finally {
     knap.disabled = false; knap.textContent = 'Opsig';
@@ -305,6 +311,9 @@ function visKvittering(d, data) {
       ${S.valgte.map((a) => `<li><b>${esc(aftaleNavn(a))}:</b> stopper ${data.stop === 'nu' ? 'nu' : a.udloeb ? `ved udløb ${esc(dato(a.udloeb))}` : 'ved udløb (ingen dato i ClickUp)'}</li>`).join('')}
       ${data.tilsendHjemmeside === null ? '' : `<li><b>Tilsend hjemmesiden:</b> ${data.tilsendHjemmeside ? 'Ja' : 'Nej'}</li>`}
     </ul>
+    ${!d.demo ? `<p class="forhaand">${d.antal === 1 ? 'Aftalen er' : 'Aftalerne er'} markeret med 🪦 i ClickUp, og der er skrevet en kommentar på kunden.</p>` : ''}
+    ${(d.tagFejl || []).length ? `<p class="obs">Disse aftaler fik ikke 🪦 og skal markeres i hånden: ${d.tagFejl.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.navn)}</a>`).join(', ')}. (Fejlkode: OF-306)</p>` : ''}
+    ${d.kommentarFejl ? `<p class="obs">Kommentaren på kunden kunne ikke skrives, men aftalerne er markeret. (Fejlkode: ${esc(d.kommentarFejl)})</p>` : ''}
     <div class="knapper">
       ${S.kunde.url ? `<a href="${esc(S.kunde.url)}" target="_blank" rel="noopener">Åbn kunden i ClickUp<span class="sr"> (åbner i ny fane)</span></a>` : ''}
       ${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">Åbn opsigelsen i ClickUp<span class="sr"> (åbner i ny fane)</span></a>` : ''}
@@ -453,9 +462,10 @@ async function demoApi(sti) {
       { id: 'g1', navn: 'Genfak SEO', produkter: [{ navn: 'SEO', farve: '#225581' }], vaerdi: 18000, udloeb: om(22), url: '' },
       { id: 'g2', navn: 'Genfak GA, G-RE', produkter: [{ navn: 'GA', farve: '#2b6aa1' }, { navn: 'G-RE', farve: '#8d8d8d' }], vaerdi: 29000, udloeb: om(9), url: '' },
       { id: 'g3', navn: 'Genfak HOS', produkter: [{ navn: 'HOS', farve: '#6647f0' }], vaerdi: 5000, udloeb: om(4), url: '' },
+      { id: 'g4', navn: 'Genfak META', produkter: [{ navn: 'META', farve: '#3e63dd' }], vaerdi: 12000, udloeb: om(2), opsagt: true, url: '' },
     ];
   }
-  if (sti === '/api/opsig') return { demo: true, ok: true };
+  if (sti === '/api/opsig') return { demo: true, ok: true, antal: S.valgte.length, tagFejl: [], kommentarFejl: null };
   throw fejlMedKode('Ukendt adresse i demo.', 'OF-404');
 }
 

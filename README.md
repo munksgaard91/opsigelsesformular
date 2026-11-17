@@ -31,7 +31,7 @@ Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigels
   ikke selv skal hente alle kunder fra ClickUp. Workeren skriver aldrig i KV.
 - Ingen cron-trigger nødvendig.
 
-Lige nu skriver "Opsig" kun en kommentar på kundeopgaven. Automatiseringerne i ClickUp kommer bagefter.
+"Opsig" sætter tagget 🪦 på hver valgt Genfak-opgave (de andre tags, fx "udløber 26/27", bliver stående) og skriver en samlet kommentar på kundeopgaven. Aftaler der allerede har 🪦, kan ikke vælges.
 
 ## Workerens API
 
