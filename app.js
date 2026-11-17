@@ -8,6 +8,17 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const norm = (s) => String(s || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').trim();
 const dato = (ms) => (ms ? new Date(+ms).toLocaleDateString('da-DK', { day: 'numeric', month: 'long', year: 'numeric' }) : null);
+const kortDato = (ms) => new Date(+ms).toLocaleDateString('da-DK', { day: 'numeric', month: 'short', year: 'numeric' });
+// Sæsonen løber juli-juni. Sæson 2026 = 1. juli 2026 til 30. juni 2027.
+const saeson = (ms) => { const d = new Date(+ms); return d.getMonth() >= 6 ? d.getFullYear() : d.getFullYear() - 1; };
+function saesonKlasse(udloeb) {
+  if (!udloeb) return { klasse: '', titel: '' };
+  const nu = saeson(Date.now()), forskel = saeson(udloeb) - nu;
+  const navn = (s) => `${s}/${String(s + 1).slice(2)}`;
+  if (forskel <= 0) return { klasse: 'denne', titel: `Udløber i indeværende sæson (${navn(nu)})` };
+  if (forskel === 1) return { klasse: 'naeste', titel: `Udløber i næste sæson (${navn(nu + 1)})` };
+  return { klasse: '', titel: `Udløber i sæson ${navn(saeson(udloeb))}` };
+}
 const kr = (v) => (v || v === 0 ? new Intl.NumberFormat('da-DK', { maximumFractionDigits: 0 }).format(+v) + ' kr.' : null);
 
 let KUNDER = [];
@@ -127,16 +138,17 @@ function tegnAftaler() {
     rod.innerHTML = `<p class="forhaand advarsel-lys">Kunden har ingen Genfak-aftaler i ClickUp, så der er ikke noget at opsige her. Tjek kundekortet.</p>`;
     opdaterAfhaengige(); return;
   }
-  rod.innerHTML = `<div class="aftaleliste" role="radiogroup" aria-label="Kundens aftaler">${a.map((x) => {
+  // Én linje pr. aftale, tidligste udløb først
+  const sorteret = [...a].sort((x, y) => (x.udloeb || Infinity) - (y.udloeb || Infinity));
+  rod.innerHTML = `<div class="aftaleliste" role="radiogroup" aria-label="Kundens aftaler">${sorteret.map((x) => {
     const valgt = S.aftale && S.aftale.id === x.id;
-    const meta = [x.udloeb && `Udløber ${dato(x.udloeb)}`, kr(x.vaerdi)].filter(Boolean).join(' · ');
+    const s = saesonKlasse(x.udloeb);
     return `<label class="aftalekort${valgt ? ' valgt' : ''}">
       <input type="radio" name="aftale" value="${esc(x.id)}"${valgt ? ' checked' : ''}>
-      <span class="indhold">
-        <span class="produkter">${(x.produkter || []).map((p) => `<span class="produkt" data-farve="${gyldigFarve(p.farve)}">${esc(p.navn)}</span>`).join('') || `<b>${esc(x.navn)}</b>`}</span>
-        ${meta ? `<span class="sub">${esc(meta)}</span>` : ''}
-      </span>
-      ${x.url ? `<a class="link" href="${esc(x.url)}" target="_blank" rel="noopener">Åbn ${IKON_UD}</a>` : ''}
+      <span class="produkter">${(x.produkter || []).map((p) => `<span class="produkt" data-farve="${gyldigFarve(p.farve)}">${esc(p.navn)}</span>`).join('') || `<b>${esc(x.navn)}</b>`}</span>
+      <span class="udloeb ${s.klasse}" title="${esc(s.titel)}">${x.udloeb ? esc(kortDato(x.udloeb)) : 'Ingen udløbsdato'}</span>
+      <span class="vaerdi">${esc(kr(x.vaerdi) || '')}</span>
+      ${x.url ? `<a class="link" href="${esc(x.url)}" target="_blank" rel="noopener" aria-label="Åbn aftalen i ClickUp">${IKON_UD}</a>` : '<span class="link"></span>'}
     </label>`;
   }).join('')}</div>`;
   rod.querySelectorAll('.produkt').forEach((el) => { el.style.background = el.dataset.farve; el.style.color = tekstfarve(el.dataset.farve); });
@@ -374,7 +386,7 @@ async function demoApi(sti) {
     const kunde = new URLSearchParams(sti.split('?')[1]).get('kunde');
     if (kunde !== 'demo1') return [];
     return [
-      { id: 'g1', navn: 'Genfak SEO', produkter: [{ navn: 'SEO', farve: '#225581' }], vaerdi: 18000, udloeb: om(9), url: '' },
+      { id: 'g1', navn: 'Genfak SEO', produkter: [{ navn: 'SEO', farve: '#225581' }], vaerdi: 18000, udloeb: om(22), url: '' },
       { id: 'g2', navn: 'Genfak GA, G-RE', produkter: [{ navn: 'GA', farve: '#2b6aa1' }, { navn: 'G-RE', farve: '#8d8d8d' }], vaerdi: 29000, udloeb: om(9), url: '' },
       { id: 'g3', navn: 'Genfak HOS', produkter: [{ navn: 'HOS', farve: '#6647f0' }], vaerdi: 5000, udloeb: om(4), url: '' },
     ];
