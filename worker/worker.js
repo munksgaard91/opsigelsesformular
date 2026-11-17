@@ -1,194 +1,348 @@
-// Cloudflare Worker til opsigelsesformularen (opsigelse.leksione.dk)
+// Opsigelsesformular: motoren bag opsigelse.leksione.dk for Best One A/S
+// Formularen ligger på GitHub Pages. Denne worker:
+//   1. tjekker Google-login (kun @best-one.dk) og udsteder en session på 30 dage
+//   2. henter kunder (fra supportformularens KV) og kundens Genfak-aftaler fra ClickUp
+//   3. registrerer opsigelsen (indtil videre kun som kommentar på kundeopgaven)
 //
-// Hemmeligheder (sættes i Cloudflare under Settings > Variables and Secrets, aldrig i koden):
-//   CLICKUP_TOKEN   ClickUp API-token (pk_...)
-//   SESSION_SECRET  lang tilfældig tekst, bruges til at signere login-sessioner
-//
-// Kald: se README.md i repoet.
+// Secrets i Cloudflare: CLICKUP_TOKEN, SESSION_SECRET
+// KV-binding: KUNDER_KV = SAMME navnerum som supportformularen. Supportens cron
+//   opdaterer kundelisten hver time, så denne worker behøver ingen cron.
+// Bygget efter samme mønster som supportformularens worker.
 
-const TILLADT_ORIGIN = 'https://opsigelse.leksione.dk';
-const GOOGLE_CLIENT_ID = '733090718962-9dda64antqa8ki7j5q3de1nfrv7rod35.apps.googleusercontent.com';
-const DOMAENE = 'best-one.dk';
-const SESSION_DAGE = 30;
-
-// ClickUp
-const CU = 'https://api.clickup.com/api/v2';
-const LISTE_KUNDER = '900800029468';
-const TYPE_GENFAK = 1008; // opgavetypen "Genfak" (custom_item_id)
-const FELT = {
-  hjemmeside: 'd8f36f07-cf17-48dd-aab6-bb6974a7cbcc',
-  produkter: 'a98fb65b-50a1-4dad-a5e1-b36bbd6615ce',
-  vaerdi: '6d274cc8-c678-49b2-a864-e221207dde01',
-  deadline: '28760aed-67b8-433d-8151-f240378e3193', // bruges som aftalens udløb
+const CFG = {
+  ORIGIN: 'https://opsigelse.leksione.dk',
+  GOOGLE_CLIENT_ID: '733090718962-9dda64antqa8ki7j5q3de1nfrv7rod35.apps.googleusercontent.com',
+  DOMAENE: 'best-one.dk',
+  SESSION_DAGE: 30,
+  KUNDER_LIST: '900800029468',
+  KV_KUNDER: 'kunder-v2',       // supportformularens nøgle (læses kun, skrives aldrig herfra)
+  GENFAK_TYPE_ID: 1008,         // opgavetypen "Genfak" = én aftale
+  CACHE_MINUTTER: 10,
+  CLICKUP_URL: 'https://bestcrm.clickup.com',
+  F: {
+    hjemmeside: 'd8f36f07-cf17-48dd-aab6-bb6974a7cbcc',
+    produkter: 'a98fb65b-50a1-4dad-a5e1-b36bbd6615ce',
+    vaerdi: '6d274cc8-c678-49b2-a864-e221207dde01',
+    deadline: '28760aed-67b8-433d-8151-f240378e3193', // aftalens udløb
+  },
 };
-const KUNDE_CACHE_SEK = 600;
 
 export default {
-  async fetch(req, env, ctx) {
-    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors() });
+  async fetch(req, env) {
+    const url = new URL(req.url);
     try {
-      const url = new URL(req.url);
-      const sti = url.pathname;
-      if (sti === '/api/login' && req.method === 'POST') return svar(await login(req, env));
+      if (req.method === 'OPTIONS') return svar(null, 204);
 
-      const bruger = await tjekSession(req, env);
-      if (sti === '/api/kunder' && req.method === 'GET') return svar(await kunder(env, ctx, url.searchParams.has('frisk')));
-      if (sti === '/api/aftaler' && req.method === 'GET') return svar(await aftaler(env, url.searchParams.get('kunde')));
-      if (sti === '/api/opsig' && req.method === 'POST') return svar(await opsig(env, bruger, await req.json().catch(() => ({}))));
-      throw fejl(404, 'Ukendt adresse.', 'OF-404');
+      if (url.pathname === '/api/login' && req.method === 'POST') {
+        const { credential } = await req.json().catch(() => ({}));
+        return svar(await login(env, credential), 200);
+      }
+
+      // Alt herunder kræver en gyldig session
+      const bruger = await tjekSession(env, req);
+      if (!bruger) return svar({ fejl: 'Du er logget ud. Log ind igen.', kode: 'OF-105' }, 401);
+
+      if (url.pathname === '/api/kunder' && req.method === 'GET') {
+        return svar(await medKode('OF-201', 'Kunderne kunne ikke hentes.', () => kunder(env, url.searchParams.has('frisk'))), 200);
+      }
+      if (url.pathname === '/api/aftaler' && req.method === 'GET') {
+        return svar(await medKode('OF-202', 'Aftalerne kunne ikke hentes.', () => aftaler(env, url.searchParams.get('kunde'))), 200);
+      }
+      if (url.pathname === '/api/opsig' && req.method === 'POST') {
+        return svar(await opsig(env, bruger, await req.json().catch(() => ({}))), 200);
+      }
+      return svar({ fejl: 'Siden findes ikke', kode: 'OF-901' }, 404);
     } catch (e) {
-      if (!e.status) console.error(e);
-      return svar({ fejl: e.status ? e.message : 'Der skete en fejl på serveren.', kode: e.kode || 'OF-900' }, e.status || 500);
+      const kode = e.kode || 'OF-900';
+      console.error(kode, url.pathname, e.detalje || '', e.message);
+      return svar({ fejl: e.status && e.status < 500 ? e.message : (e.kode ? e.message : 'Der skete en uventet fejl.'), kode }, e.status || 500);
     }
   },
 };
 
+// Giver fejl ved hentning en egen kode, men bevarer de mere præcise ClickUp-koder (OF-3xx)
+async function medKode(kode, tekst, fn) {
+  try { return await fn(); } catch (e) {
+    if (e.kode && (e.kode.startsWith('OF-3') || e.kode === 'OF-400')) throw e;
+    throw fejl(tekst, 502, kode, e.detalje || e.message);
+  }
+}
+
+// ---------- Login (samme metode som supportformularen) ----------
+
+const b64url = {
+  til: (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  fra: (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0)),
+  tekst: (s) => new TextDecoder().decode(b64url.fra(s)),
+};
+
+function fejl(msg, status, kode, detalje) {
+  const e = new Error(msg);
+  e.status = status;
+  e.kode = kode;
+  e.detalje = detalje;
+  return e;
+}
+
+let JWKS = { t: 0, keys: [] };
+async function googleNoegler(tving) {
+  if (!tving && Date.now() - JWKS.t < 3600000 && JWKS.keys.length) return JWKS.keys;
+  const r = await fetch('https://www.googleapis.com/oauth2/v3/certs');
+  JWKS = { t: Date.now(), keys: (await r.json()).keys };
+  return JWKS.keys;
+}
+
+// Tjekker Googles ID-token: signatur, udsteder, app, udløb og domæne
+async function login(env, credential) {
+  if (!credential) throw fejl('Mangler login fra Google.', 400, 'OF-101');
+  const [h, p, sig] = String(credential).split('.');
+  let header, data;
+  try { header = JSON.parse(b64url.tekst(h)); data = JSON.parse(b64url.tekst(p)); }
+  catch { throw fejl('Ugyldigt login.', 401, 'OF-102', 'Kunne ikke læse login fra Google'); }
+
+  let jwk = (await googleNoegler()).find((k) => k.kid === header.kid);
+  if (!jwk) jwk = (await googleNoegler(true)).find((k) => k.kid === header.kid); // Google har skiftet nøgle
+  if (!jwk || header.alg !== 'RS256') throw fejl('Ugyldigt login.', 401, 'OF-102', 'Ukendt nøgle eller algoritme');
+  const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+  const ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, b64url.fra(sig), new TextEncoder().encode(`${h}.${p}`));
+
+  const nu = Math.floor(Date.now() / 1000);
+  if (!ok) throw fejl('Ugyldigt login.', 401, 'OF-102', 'Signatur passer ikke');
+  if (!['accounts.google.com', 'https://accounts.google.com'].includes(data.iss)) throw fejl('Ugyldigt login.', 401, 'OF-102', 'Forkert udsteder');
+  if (data.aud !== CFG.GOOGLE_CLIENT_ID) throw fejl('Login er ikke sat rigtigt op.', 500, 'OF-107', `Client ID passer ikke: ${data.aud}`);
+  if (data.exp < nu) throw fejl('Login er udløbet. Prøv igen.', 401, 'OF-104');
+  if (data.hd !== CFG.DOMAENE || !data.email_verified) throw fejl(`Log ind med din @${CFG.DOMAENE}-konto.`, 403, 'OF-103', data.email);
+
+  const session = { email: data.email, navn: data.name || data.email, exp: nu + CFG.SESSION_DAGE * 86400 };
+  return { token: await signer(env, session), ...session, billede: data.picture || null };
+}
+
+async function hmacNoegle(env) {
+  if (!env.SESSION_SECRET) throw fejl('Formularen er ikke sat rigtigt op.', 500, 'OF-106', 'SESSION_SECRET mangler');
+  return crypto.subtle.importKey('raw', new TextEncoder().encode(env.SESSION_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+}
+
+async function signer(env, data) {
+  const p = b64url.til(new TextEncoder().encode(JSON.stringify(data)));
+  const sig = await crypto.subtle.sign('HMAC', await hmacNoegle(env), new TextEncoder().encode(p));
+  return `${p}.${b64url.til(sig)}`;
+}
+
+async function tjekSession(env, req) {
+  const m = (req.headers.get('Authorization') || '').match(/^Bearer (.+)\.(.+)$/);
+  if (!m) return null;
+  const noegle = await hmacNoegle(env); // mangler SESSION_SECRET, skal det vises som en opsætningsfejl
+  try {
+    const ok = await crypto.subtle.verify('HMAC', noegle, b64url.fra(m[2]), new TextEncoder().encode(m[1]));
+    if (!ok) return null;
+    const data = JSON.parse(b64url.tekst(m[1]));
+    return data.exp > Date.now() / 1000 ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------- Hjælpere ----------
-function cors() {
-  return {
-    'Access-Control-Allow-Origin': TILLADT_ORIGIN,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Max-Age': '86400',
-    Vary: 'Origin',
-  };
-}
-function svar(data, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...cors() } });
-}
-function fejl(status, tekst, kode) { const e = new Error(tekst); e.status = status; e.kode = kode; return e; }
 
-async function clickup(env, sti, opts = {}) {
-  if (!env.CLICKUP_TOKEN) throw fejl(500, 'Workeren mangler ClickUp-nøglen.', 'OF-701');
-  const r = await fetch(CU + sti, { ...opts, headers: { Authorization: env.CLICKUP_TOKEN, 'Content-Type': 'application/json', ...(opts.headers || {}) } });
-  if (!r.ok) {
-    console.error('ClickUp', r.status, sti, await r.text().catch(() => ''));
-    if (r.status === 404) throw fejl(404, 'Opgaven findes ikke i ClickUp.', 'OF-704');
-    throw fejl(502, 'ClickUp svarede med en fejl.', 'OF-702');
+function svar(data, status) {
+  return new Response(data === null ? null : JSON.stringify(data), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': CFG.ORIGIN,
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      Vary: 'Origin',
+    },
+  });
+}
+
+async function cu(env, path, opts = {}) {
+  if (!env.CLICKUP_TOKEN) throw fejl('Formularen er ikke sat rigtigt op.', 500, 'OF-301', 'CLICKUP_TOKEN mangler');
+  const res = await fetch('https://api.clickup.com/api/v2' + path, {
+    ...opts,
+    headers: { Authorization: env.CLICKUP_TOKEN, 'Content-Type': 'application/json' },
+  });
+  const tekst = await res.text();
+  let data;
+  try { data = JSON.parse(tekst); } catch { data = tekst; }
+  if (!res.ok) {
+    const msg = typeof data === 'string' ? data : `${data.err || ''} ${data.ECODE || ''}`.trim() || JSON.stringify(data);
+    const detalje = `ClickUp ${res.status} ${path.split('?')[0]}: ${msg}`;
+    const ecode = (data && data.ECODE) || '';
+    if (res.status === 401 && /OAUTH_01[789]|OAUTH_025|token/i.test(ecode + msg)) throw fejl('Formularen kan ikke logge ind i ClickUp.', 502, 'OF-301', detalje);
+    if (res.status === 401 || res.status === 403 || res.status === 404) throw fejl('Formularen har ikke adgang til opgaven i ClickUp.', 502, 'OF-302', detalje);
+    if (res.status === 429) throw fejl('ClickUp har for travlt lige nu. Prøv igen om et minut.', 503, 'OF-304', detalje);
+    if (res.status >= 500) throw fejl('ClickUp svarer ikke lige nu. Prøv igen om lidt.', 503, 'OF-305', detalje);
+    throw fejl('ClickUp afviste opsigelsen.', 502, 'OF-303', detalje);
   }
-  return r.json();
-}
-const felt = (task, id) => (task.custom_fields || []).find((f) => f.id === id);
-
-// ---------- Login ----------
-const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const tekstTilB64url = (s) => b64url(new TextEncoder().encode(s));
-const b64urlTilTekst = (s) => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0)));
-
-async function hmac(env, data) {
-  if (!env.SESSION_SECRET) throw fejl(500, 'Workeren mangler SESSION_SECRET.', 'OF-703');
-  const noegle = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.SESSION_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  return b64url(await crypto.subtle.sign('HMAC', noegle, new TextEncoder().encode(data)));
+  return data;
 }
 
-async function login(req, env) {
-  const { credential } = await req.json().catch(() => ({}));
-  if (!credential) throw fejl(400, 'Login mangler.', 'OF-101');
-  // Google tjekker selv signaturen på tokenet; vi tjekker hvem det er udstedt til og til hvilket domæne
-  const r = await fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(credential));
-  if (!r.ok) throw fejl(401, 'Google kunne ikke bekræfte dit login. Prøv igen.', 'OF-102');
-  const g = await r.json();
-  if (g.aud !== GOOGLE_CLIENT_ID) throw fejl(401, 'Login er udstedt til en anden app.', 'OF-103');
-  if (g.hd !== DOMAENE || String(g.email_verified) !== 'true' || !String(g.email).toLowerCase().endsWith('@' + DOMAENE)) {
-    throw fejl(403, `Kun ${DOMAENE}-konti har adgang.`, 'OF-104');
-  }
-  const exp = Math.floor(Date.now() / 1000) + SESSION_DAGE * 86400;
-  const data = tekstTilB64url(JSON.stringify({ email: g.email, navn: g.name || g.email, exp }));
-  return { token: data + '.' + (await hmac(env, data)), navn: g.name || g.email, billede: g.picture || null, exp };
+// Skifter app.clickup.com ud med jeres eget domæne
+const cuLink = (u) => String(u || '').replace(/^https:\/\/app\.clickup\.com/, CFG.CLICKUP_URL);
+
+function felt(task, id) {
+  const f = (task.custom_fields || []).find((x) => x.id === id);
+  return f && f.value !== undefined ? f.value : null;
 }
 
-async function tjekSession(req, env) {
-  const t = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
-  const [data, sig] = t.split('.');
-  if (!data || !sig || sig !== (await hmac(env, data))) throw fejl(401, 'Du er logget ud. Log ind igen.', 'OF-105');
-  let s;
-  try { s = JSON.parse(b64urlTilTekst(data)); } catch { throw fejl(401, 'Du er logget ud. Log ind igen.', 'OF-105'); }
-  if (!s.exp || s.exp < Date.now() / 1000) throw fejl(401, 'Dit login er udløbet. Log ind igen.', 'OF-106');
+function domaene(u) {
+  if (!u) return '';
+  let s = String(u).trim().toLowerCase();
+  s = s.replace(/^[a-z]+:\/\//, '').replace(/^www\./, '').split(/[\/?#]/)[0];
+  try { s = new URL('https://' + s).hostname.replace(/^www\./, ''); } catch {}
   return s;
 }
 
 // ---------- Kunder ----------
-async function kunder(env, ctx, frisk) {
-  const cache = caches.default;
-  const noegle = new Request('https://cache.opsigelse.internal/kunder');
-  if (!frisk) {
-    const hit = await cache.match(noegle);
-    if (hit) return hit.json();
-  }
-  const ud = [];
-  for (let side = 0; side < 100; side++) {
-    const d = await clickup(env, `/list/${LISTE_KUNDER}/task?page=${side}&subtasks=false&include_closed=true&archived=false`);
-    for (const t of d.tasks || []) {
-      if (t.parent) continue;
-      const hj = felt(t, FELT.hjemmeside)?.value || '';
-      ud.push({
-        id: t.id,
-        navn: t.name,
-        domaene: String(hj).toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, ''),
-        status: t.status?.status || '',
-        url: t.url,
-      });
+// Læses fra supportformularens KV (opdateres hver time af dens cron). Kun de felter,
+// formularen bruger, sendes videre. Findes listen ikke dér, hentes den selv fra ClickUp.
+
+const MEM = {};
+const kort = (k) => ({ id: k.id, navn: k.navn, domaene: k.domaene || '', status: k.status || '', url: cuLink(k.url) });
+
+async function kunder(env, frisk) {
+  const hit = MEM.kunder;
+  if (!frisk && hit && Date.now() - hit.t < CFG.CACHE_MINUTTER * 60000) return hit.data;
+  if (!frisk && env.KUNDER_KV) {
+    const gemt = await env.KUNDER_KV.get(CFG.KV_KUNDER, 'json');
+    if (Array.isArray(gemt) && gemt.length) {
+      const data = gemt.map(kort);
+      MEM.kunder = { t: Date.now(), data };
+      return data;
     }
-    if (d.last_page || !(d.tasks || []).length) break;
   }
-  ud.sort((a, b) => a.navn.localeCompare(b.navn, 'da'));
-  ctx.waitUntil(cache.put(noegle, new Response(JSON.stringify(ud), { headers: { 'Cache-Control': `max-age=${KUNDE_CACHE_SEK}` } })));
-  return ud;
+  return hentKunderSelv(env);
+}
+
+// Kun én hentning ad gangen: kommer der flere forespørgsler samtidig, venter de på den samme
+let iGang = null;
+async function hentKunderSelv(env) {
+  if (iGang) return iGang;
+  iGang = (async () => {
+    const SAMTIDIGE = 6;
+    const ud = [];
+    let side = 0, faerdig = false;
+    while (!faerdig && side < 60) {
+      const sider = Array.from({ length: SAMTIDIGE }, (_, i) => side + i);
+      const svar = await Promise.all(sider.map((p) =>
+        cu(env, `/list/${CFG.KUNDER_LIST}/task?page=${p}&subtasks=false&include_closed=true&archived=false`)));
+      for (const d of svar) {
+        const tasks = d.tasks || [];
+        for (const t of tasks) {
+          const hj = felt(t, CFG.F.hjemmeside) || '';
+          ud.push({ id: t.id, navn: t.name, domaene: domaene(hj), status: (t.status && t.status.status) || '', url: cuLink(t.url) });
+        }
+        if (d.last_page || tasks.length === 0) { faerdig = true; break; }
+      }
+      side += SAMTIDIGE;
+    }
+    ud.sort((a, b) => a.navn.localeCompare(b.navn, 'da'));
+    MEM.kunder = { t: Date.now(), data: ud };
+    return ud;
+  })();
+  try { return await iGang; } finally { iGang = null; }
 }
 
 // ---------- Aftaler (kundens Genfak-underopgaver) ----------
-function tilAftale(t) {
-  const pf = felt(t, FELT.produkter);
-  const valg = pf?.type_config?.options || [];
-  const produkter = (Array.isArray(pf?.value) ? pf.value : []).map((v) => {
-    const id = typeof v === 'object' ? v.id : v;
-    const o = valg.find((x) => x.id === id);
-    return { navn: o?.label || o?.name || (typeof v === 'object' ? v.label : '') || '?', farve: o?.color || null };
-  });
-  const vaerdi = felt(t, FELT.vaerdi)?.value;
-  const deadline = felt(t, FELT.deadline)?.value;
-  return { id: t.id, navn: t.name, produkter, vaerdi: vaerdi != null && vaerdi !== '' ? +vaerdi : null, udloeb: deadline ? +deadline : null, url: t.url };
+
+// Produktvalgene (navn og farve) hentes én gang fra Kunder-listens felt, hvis opgaven ikke selv har dem
+let PRODUKT_OPTS = [];
+async function produktValg(env) {
+  if (PRODUKT_OPTS.length) return PRODUKT_OPTS;
+  try {
+    const felter = await cu(env, `/list/${CFG.KUNDER_LIST}/field`);
+    const pf = (felter.fields || []).find((f) => f.id === CFG.F.produkter);
+    if (pf && pf.type_config && pf.type_config.options) PRODUKT_OPTS = pf.type_config.options;
+  } catch {}
+  return PRODUKT_OPTS;
+}
+
+function produkter(t, reserve) {
+  const f = (t.custom_fields || []).find((x) => x.id === CFG.F.produkter);
+  if (!f || !Array.isArray(f.value)) return [];
+  const opts = (f.type_config && f.type_config.options && f.type_config.options.length) ? f.type_config.options : reserve;
+  return f.value
+    .map((v) => opts.find((o) => o.id === (v && v.id ? v.id : v)))
+    .filter(Boolean)
+    .sort((a, b) => (a.orderindex ?? 0) - (b.orderindex ?? 0))
+    .map((o) => ({ navn: o.label || o.name, farve: o.color || '#e9e9e9' }));
+}
+
+function tilAftale(t, reserve) {
+  const vaerdi = felt(t, CFG.F.vaerdi);
+  const deadline = felt(t, CFG.F.deadline);
+  return {
+    id: t.id,
+    navn: t.name,
+    produkter: produkter(t, reserve),
+    vaerdi: vaerdi !== null && vaerdi !== '' ? Number(vaerdi) : null,
+    udloeb: deadline ? Number(deadline) : null,
+    url: cuLink(t.url),
+  };
 }
 
 async function genfakOpgaver(env, kundeId) {
-  const kunde = await clickup(env, `/task/${encodeURIComponent(kundeId)}?include_subtasks=true`);
+  if (!/^[a-z0-9]+$/i.test(String(kundeId || ''))) throw fejl('Ukendt kunde.', 400, 'OF-400');
+  const kunde = await cu(env, `/task/${kundeId}?include_subtasks=true`);
   const ids = (kunde.subtasks || [])
-    .filter((s) => s.custom_item_id === TYPE_GENFAK && s.status?.type !== 'closed')
+    // Mangler typen i oversigten, hentes opgaven alligevel og filtreres nedenfor
+    .filter((s) => (s.custom_item_id === undefined || s.custom_item_id === CFG.GENFAK_TYPE_ID) && !(s.status && s.status.type === 'closed'))
     .map((s) => s.id);
-  const opgaver = await Promise.all(ids.map((id) => clickup(env, `/task/${id}`)));
-  return { kunde, opgaver };
+  const opgaver = await Promise.all(ids.map((id) => cu(env, `/task/${id}`)));
+  // Kun opgaver der stadig er Genfak og hører til kunden
+  return { kunde, opgaver: opgaver.filter((o) => o.parent === kunde.id && o.custom_item_id === CFG.GENFAK_TYPE_ID) };
 }
 
 async function aftaler(env, kundeId) {
-  if (!kundeId) throw fejl(400, 'Kunden mangler.', 'OF-201');
-  const { opgaver } = await genfakOpgaver(env, kundeId);
-  return opgaver.map(tilAftale).sort((a, b) => (a.udloeb || Infinity) - (b.udloeb || Infinity));
+  const [{ opgaver }, reserve] = await Promise.all([genfakOpgaver(env, kundeId), produktValg(env)]);
+  return opgaver.map((t) => tilAftale(t, reserve)).sort((a, b) => (a.udloeb || Infinity) - (b.udloeb || Infinity));
 }
 
 // ---------- Opsig ----------
 // Indtil automatiseringerne er besluttet, skrives opsigelsen kun som en kommentar på kundeopgaven.
-async function opsig(env, bruger, d) {
-  const varighed = Number(d.varighed);
-  if (!d.kundeId || !d.aftaleId) throw fejl(400, 'Kunde eller aftale mangler.', 'OF-400');
-  if (![1, 2, 3, 4, 5].includes(varighed)) throw fejl(400, 'Ugyldig varighed.', 'OF-400');
-  if (!['nu', 'udloeb'].includes(d.stop)) throw fejl(400, 'Ugyldigt stoptidspunkt.', 'OF-400');
+
+const erHosting = (navn) => /^hos\+?$|hosting/i.test(String(navn).trim()); // HOS og HOS+, ikke H0S (nul)
+
+async function opsig(env, bruger, b) {
+  const varighed = Number(b.varighed);
+  if (!b.kundeId || !b.aftaleId) throw fejl('Vælg kunden og aftalen.', 400, 'OF-400');
+  if (![1, 2, 3, 4, 5].includes(varighed)) throw fejl('Vælg aftalens samlede varighed.', 400, 'OF-400');
+  if (!['nu', 'udloeb'].includes(b.stop)) throw fejl('Vælg hvornår kunden stopper.', 400, 'OF-400');
 
   // Aftalen skal høre til kunden
-  const { kunde, opgaver } = await genfakOpgaver(env, d.kundeId);
-  const opgave = opgaver.find((o) => o.id === d.aftaleId);
-  if (!opgave) throw fejl(400, 'Aftalen hører ikke til kunden. Genindlæs siden.', 'OF-401');
-  const aftale = tilAftale(opgave);
-  const hosting = aftale.produkter.some((p) => /^hos\+?$|hosting/i.test(p.navn.trim()));
-  if (hosting && typeof d.tilsendHjemmeside !== 'boolean') throw fejl(400, 'Svar på om kunden skal have tilsendt hjemmesiden.', 'OF-400');
+  const [{ kunde, opgaver }, reserve] = await Promise.all([genfakOpgaver(env, b.kundeId), produktValg(env)]);
+  const opgave = opgaver.find((o) => o.id === b.aftaleId);
+  if (!opgave) throw fejl('Aftalen hører ikke til kunden. Genindlæs siden og prøv igen.', 400, 'OF-401');
+  const aftale = tilAftale(opgave, reserve);
+  const hosting = aftale.produkter.some((p) => erHosting(p.navn));
+  if (hosting && typeof b.tilsendHjemmeside !== 'boolean') throw fejl('Vælg om kunden skal have tilsendt hjemmesiden.', 400, 'OF-400');
 
   const dato = (ms) => new Date(ms).toLocaleDateString('da-DK', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Copenhagen' });
-  const linjer = [
-    `🔴 Opsigelse registreret af ${bruger.navn}`,
-    `Aftale: ${aftale.produkter.map((p) => p.navn).join(', ') || aftale.navn} (${aftale.url})`,
+  const produktTekst = aftale.produkter.map((p) => p.navn).join(', ') || aftale.navn;
+  const stopTekst = b.stop === 'nu' ? 'Nu' : `Ved udløb af aftalen${aftale.udloeb ? ` (${dato(aftale.udloeb)})` : ''}`;
+  const detaljer = [
     `Aftalens varighed: ${varighed} år`,
-    `Stopper: ${d.stop === 'nu' ? 'Nu' : `Ved udløb af aftalen${aftale.udloeb ? ` (${dato(aftale.udloeb)})` : ''}`}`,
+    `Stopper: ${stopTekst}`,
+    ...(hosting ? [`Tilsend hjemmesiden: ${b.tilsendHjemmeside ? 'Ja' : 'Nej'}`] : []),
   ];
-  if (hosting) linjer.push(`Tilsend hjemmesiden: ${d.tilsendHjemmeside ? 'Ja' : 'Nej'}`);
-  await clickup(env, `/task/${kunde.id}/comment`, { method: 'POST', body: JSON.stringify({ comment_text: linjer.join('\n'), notify_all: false }) });
+
+  // Formateret kommentar (ClickUp rich text), med almindelig tekst som reserve
+  const comment = [
+    { text: `🔴 Opsigelse | ${produktTekst}`, attributes: { bold: true } },
+    { text: '\n' },
+    { text: aftale.url, attributes: { link: aftale.url } },
+    { text: '\n\n' + detaljer.join('\n') + '\n\n' },
+    { text: `Registreret af ${bruger.navn} i opsigelsesformularen.`, attributes: { italic: true } },
+    { text: '\n' },
+  ];
+  try {
+    await cu(env, `/task/${kunde.id}/comment`, { method: 'POST', body: JSON.stringify({ comment, notify_all: false }) });
+  } catch {
+    const tekst = `🔴 Opsigelse | ${produktTekst}\n${aftale.url}\n\n${detaljer.join('\n')}\n\nRegistreret af ${bruger.navn} i opsigelsesformularen.`;
+    await cu(env, `/task/${kunde.id}/comment`, { method: 'POST', body: JSON.stringify({ comment_text: tekst, notify_all: false }) });
+  }
   return { ok: true };
 }

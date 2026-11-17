@@ -20,23 +20,15 @@ Ligger på https://opsigelse.leksione.dk og kræver login med en best-one.dk Goo
 Åbn siden fra `localhost` eller med `?demo` i adressen. Så kører den med opdigtede testdata og uden login,
 og der sendes intet til ClickUp.
 
-## Workerens API
-
-| Kald | Svar |
-|---|---|
-| `POST /api/login` `{ credential }` | `{ token, navn, billede, exp }`. Google-token tjekkes, og `hd` skal være `best-one.dk`. |
-| `GET /api/kunder` | `[{ id, navn, domaene, status, url }]` |
-| `GET /api/aftaler?kunde=<id>` | `[{ id, navn, produkter: [{ navn, farve }], vaerdi, udloeb, url }]` (kundens Genfak-underopgaver) |
-| `POST /api/opsig` `{ kundeId, aftaleId, varighed, stop, tilsendHjemmeside }` | `{ ok, url? }` |
-
-Fejl svares som `{ fejl, kode }` med fejlkoder `OF-xxx`.
-
 ## Worker
 
 Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigelsesformular`
-(Workers & Pages > opsigelsesformular > Edit code). Den skal have to hemmeligheder:
+(Workers & Pages > opsigelsesformular > Edit code). Den er bygget efter samme mønster som supportformularens worker.
 
-- `CLICKUP_TOKEN`: ClickUp API-token
-- `SESSION_SECRET`: lang tilfældig tekst (fx `openssl rand -hex 32`)
+- Secrets: `CLICKUP_TOKEN` og `SESSION_SECRET`
+- KV-binding: `KUNDER_KV` = **samme** KV-navnerum som supportformularen. Kundelisten læses derfra
+  (nøglen `kunder-v2`, opdateres hver time af supportformularens cron), så opsigelsesformularen
+  ikke selv skal hente alle kunder fra ClickUp. Workeren skriver aldrig i KV.
+- Ingen cron-trigger nødvendig.
 
 Lige nu skriver "Opsig" kun en kommentar på kundeopgaven. Automatiseringerne i ClickUp kommer bagefter.

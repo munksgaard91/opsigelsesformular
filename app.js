@@ -112,6 +112,9 @@ async function vaelgKunde(k) {
 }
 function nulstilKunde() {
   S.kunde = null; S.aftaler = null; S.aftale = null;
+  // Svarene hører til den forrige kunde, så de nulstilles
+  ['#varighed', '#stop', '#overdragelse'].forEach((s) => document.querySelectorAll(`${s} button`).forEach((b) => b.setAttribute('aria-pressed', 'false')));
+  S.varighed = S.stop = S.overdragelse = null;
   $('#kundeValgt').classList.add('skjult');
   $('#kundeSoeg').classList.remove('skjult');
   $('#resten').classList.add('skjult');
@@ -197,15 +200,26 @@ segment($('#stop'), (v) => { S.stop = v; opdaterStopTekst(); });
 segment($('#overdragelse'), (v) => (S.overdragelse = v));
 
 // ---------- Data ----------
+// Kundelisten huskes i browseren, så søgningen er klar med det samme næste gang.
+// Den friske liste hentes bagefter i baggrunden. Kun navn, domæne, status og link gemmes.
+const KUNDE_LAGER = 'opsigelsesformular.kunder';
+function gemteKunder() {
+  try { const g = JSON.parse(localStorage.getItem(KUNDE_LAGER)); return Array.isArray(g?.liste) ? g.liste : null; } catch { return null; }
+}
 async function hentKunder(frisk) {
   const input = $('#kundeInput');
-  input.placeholder = 'Henter kunder…';
+  const gemt = !frisk && gemteKunder();
+  if (gemt && !KUNDER.length) { KUNDER = gemt; input.placeholder = `Søg blandt ${KUNDER.length} kunder`; }
+  else if (!KUNDER.length || frisk) input.placeholder = 'Henter kunder…';
   try {
-    KUNDER = await api('/api/kunder' + (frisk ? '?frisk=1' : ''));
+    const liste = await api('/api/kunder' + (frisk ? '?frisk=1' : ''));
+    KUNDER = liste;
     input.placeholder = `Søg blandt ${KUNDER.length} kunder`;
-    if (frisk) kundeCombo.tegn();
+    try { localStorage.setItem(KUNDE_LAGER, JSON.stringify({ tid: Date.now(), liste })); } catch {}
+    // Opdatér en åben søgeliste med det samme
+    if (frisk || (document.activeElement === input && $('#kundeListe').classList.contains('aaben'))) kundeCombo.tegn();
   } catch (e) {
-    input.placeholder = 'Kunne ikke hente kunder. Genindlæs siden.' + (e.kode ? ` (Fejlkode: ${e.kode})` : '');
+    if (!KUNDER.length) input.placeholder = 'Kunne ikke hente kunder. Genindlæs siden.' + (e.kode ? ` (Fejlkode: ${e.kode})` : '');
   }
 }
 function start() { hentKunder(false); }
@@ -237,7 +251,8 @@ $('#opsig').addEventListener('click', async () => {
     const d = await api('/api/opsig', { method: 'POST', body: JSON.stringify(data) });
     visKvittering(d, data);
   } catch (e) {
-    fejl.textContent = visFejl(e) + ' Prøv igen, eller giv besked med fejlkoden, hvis det fortsætter.';
+    const brugerfejl = ['OF-400', 'OF-401'].includes(e.kode);
+    fejl.textContent = visFejl(e) + (brugerfejl ? '' : ' Prøv igen, eller giv besked med fejlkoden, hvis det fortsætter.');
   } finally {
     knap.disabled = false; knap.textContent = 'Opsig';
   }
@@ -269,11 +284,27 @@ function visKvittering(d, data) {
 }
 
 function nulstilAlt() {
-  ['#varighed', '#stop', '#overdragelse'].forEach((s) => document.querySelectorAll(`${s} button`).forEach((b) => b.setAttribute('aria-pressed', 'false')));
-  S.varighed = S.stop = S.overdragelse = null;
   nulstilKunde();
   $('#kvittering').classList.add('skjult'); $('#formular').classList.remove('skjult');
 }
+
+// ---------- Baggrundsvideo (samme som supportformularen) ----------
+(function () {
+  const v = $('#bgVideo');
+  const spar = navigator.connection && navigator.connection.saveData;
+  const rolig = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!v || spar || rolig) { v && v.remove(); return; }
+  const fjern = () => { v.remove(); document.body.classList.remove('har-video'); };
+  v.addEventListener('error', fjern, true);
+  v.querySelectorAll('source').forEach((src) => src.addEventListener('error', fjern));
+  // Blåt slør først, når videoen faktisk kører
+  v.addEventListener('playing', () => document.body.classList.add('har-video'), { once: true });
+  // Videoen hentes først, når resten af siden er klar, så den ikke forsinker formularen
+  const startVideo = () => { v.preload = 'auto'; v.load(); v.play().catch(() => {}); };
+  document.readyState === 'complete' ? startVideo() : window.addEventListener('load', startVideo, { once: true });
+  // Pause når fanen ikke er synlig, så den ikke bruger strøm i baggrunden
+  document.addEventListener('visibilitychange', () => (document.hidden ? v.pause() : v.play().catch(() => {})));
+})();
 
 // ---------- Login og API ----------
 const SESSION_KEY = 'opsigelsesformular.session';
@@ -351,7 +382,7 @@ async function onGoogle(svar) {
 
 $('#logud').onclick = () => {
   if (DEMO) return;
-  localStorage.removeItem(SESSION_KEY);
+  try { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(KUNDE_LAGER); } catch {}
   if (googleKlar) google.accounts.id.disableAutoSelect();
   visLogin();
 };
