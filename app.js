@@ -115,21 +115,31 @@ async function vaelgKunde(k) {
   $('#kundeSoeg').classList.add('skjult');
   const el = $('#kundeValgt');
   el.classList.remove('skjult');
-  el.innerHTML = `<div class="kunde"><span><b>${esc(k.navn)}</b><span class="sub">${esc(k.domaene || 'Ingen hjemmeside på kundekortet')}</span></span>
+  el.innerHTML = `<div class="kunde"><span><b>${esc(k.navn)}</b><span class="sub">${esc(k.domaene || 'Ingen hjemmeside på kundekortet')}</span><span class="sub saelger" id="saelger">Sælger: henter…</span></span>
     <span class="handl">${k.url ? `<a class="link" href="${esc(k.url)}" target="_blank" rel="noopener">Åbn i ClickUp ${IKON_UD}</a>` : ''}<button class="link" type="button" id="skiftKunde">Vælg ny kunde</button></span></div>
     ${LUKKET.test(k.status) ? `<p class="advarsel">Kunden har allerede status "${esc(k.status)}". Tjek at opsigelsen ikke er lavet før.</p>` : ''}`;
   $('#skiftKunde').onclick = nulstilKunde;
   $('#resten').classList.remove('skjult');
   tegnAftaler();
   try {
-    const aftaler = await hentAftaler(k.id);
+    const svar = await hentAftaler(k.id);
     if (S.kunde !== k) return; // brugeren har skiftet kunde imens
-    S.aftaler = aftaler;
+    // Ældre worker svarer kun med listen; ny svarer med { aftaler, saelger }
+    S.aftaler = Array.isArray(svar) ? svar : svar.aftaler;
+    visSaelger(Array.isArray(svar) ? undefined : svar.saelger);
   } catch (e) {
     if (S.kunde !== k) return;
     S.aftaler = { fejl: visFejl(e) };
+    visSaelger(undefined);
   }
   tegnAftaler();
+}
+// Sælgeren fra feltet "Sælger" på hovedopgaven. undefined = kunne ikke hentes, null = ikke udfyldt.
+function visSaelger(s) {
+  const el = $('#saelger');
+  if (!el) return;
+  if (s === undefined) { el.remove(); return; }
+  el.textContent = s ? `Sælger: ${s.navn}` : 'Sælger: ikke udfyldt på kundekortet';
 }
 function nulstilKunde() {
   S.kunde = null; S.aftaler = null; S.valgte = [];
@@ -315,6 +325,8 @@ function visKvittering(d, data) {
     ${d.mailFejl ? `<p class="obs">Mailen til bogholderiet kunne ikke sendes. Giv dem besked selv. (Fejlkode: ${esc(d.mailFejl)})</p>` : ''}
     ${d.adminTilfoejet ? `<p class="forhaand">Hjemmeside Admin er sat på kunden, fordi opsigelsen kun gælder hjemmesiden.</p>` : ''}
     ${d.adminFejl ? `<p class="obs">Hjemmeside Admin kunne ikke sættes på kunden. Gør det i hånden. (Fejlkode: ${esc(d.adminFejl)})</p>` : ''}
+    ${d.dueSat ? `<p class="forhaand">Kunden havde ingen due date, så den er sat til ${esc(dato(d.dueSat))}.</p>` : ''}
+    ${d.dueFejl ? `<p class="obs">Due date på kunden kunne ikke tjekkes. Tjek den i hånden. (Fejlkode: ${esc(d.dueFejl)})</p>` : ''}
     ${!d.demo && !Array.isArray(d.tagFejl) ? `<p class="forhaand">Opsigelsen er skrevet som en kommentar på kunden.</p>` : ''}
     ${(d.tagFejl || []).length ? `<p class="obs">Disse aftaler fik ikke 🪦 og skal markeres i hånden: ${d.tagFejl.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.navn)}</a>`).join(', ')}. (Fejlkode: OF-306)</p>` : ''}
     ${d.kommentarFejl ? `<p class="obs">Kommentaren på kunden kunne ikke skrives, men aftalerne er markeret. (Fejlkode: ${esc(d.kommentarFejl)})</p>` : ''}
@@ -461,13 +473,13 @@ async function demoApi(sti) {
   ];
   if (sti.startsWith('/api/aftaler')) {
     const kunde = new URLSearchParams(sti.split('?')[1]).get('kunde');
-    if (kunde !== 'demo1') return [];
-    return [
+    if (kunde !== 'demo1') return { aftaler: [], saelger: null };
+    return { saelger: { navn: 'Sælger Eksempel', initialer: 'SE' }, aftaler: [
       { id: 'g1', navn: 'Genfak SEO', produkter: [{ navn: 'SEO', farve: '#225581' }], vaerdi: 18000, udloeb: om(22), url: '' },
       { id: 'g2', navn: 'Genfak GA, G-RE', produkter: [{ navn: 'GA', farve: '#2b6aa1' }, { navn: 'G-RE', farve: '#8d8d8d' }], vaerdi: 29000, udloeb: om(9), url: '' },
       { id: 'g3', navn: 'Genfak HOS', produkter: [{ navn: 'HOS', farve: '#6647f0' }], vaerdi: 5000, udloeb: om(4), url: '' },
       { id: 'g4', navn: 'Genfak META', produkter: [{ navn: 'META', farve: '#3e63dd' }], vaerdi: 12000, udloeb: om(2), opsagt: true, url: '' },
-    ];
+    ] };
   }
   if (sti === '/api/opsig') return { demo: true, ok: true, antal: S.valgte.length, tagFejl: [], mailFejl: null, kommentarFejl: null };
   throw fejlMedKode('Ukendt adresse i demo.', 'OF-404');

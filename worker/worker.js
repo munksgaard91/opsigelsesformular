@@ -24,6 +24,7 @@ const CFG = {
   CLICKUP_URL: 'https://bestcrm.clickup.com',
   F: {
     hjemmeside: 'd8f36f07-cf17-48dd-aab6-bb6974a7cbcc',
+    saelger: '6d1d0348-5ce2-44b3-81ff-58755fe3a01e',   // "Sælger" på hovedopgaven
     produkter: 'a98fb65b-50a1-4dad-a5e1-b36bbd6615ce',
     vaerdi: '6d274cc8-c678-49b2-a864-e221207dde01',
     deadline: '28760aed-67b8-433d-8151-f240378e3193', // aftalens udløb
@@ -316,9 +317,19 @@ async function genfakOpgaverLangsomt(env, kundeId) {
   return { kunde, opgaver: opgaver.filter((o) => erGenfak(o, kunde.id)) };
 }
 
+// Svarer med kundens aftaler og sælgeren fra hovedopgaven (hentes samtidig, så det ikke koster ventetid)
 async function aftaler(env, kundeId) {
-  const [{ opgaver }, reserve] = await Promise.all([genfakOpgaver(env, kundeId), produktValg(env)]);
-  return opgaver.map((t) => tilAftale(t, reserve)).sort((a, b) => (a.udloeb || Infinity) - (b.udloeb || Infinity));
+  const [{ opgaver }, reserve, hoved] = await Promise.all([
+    genfakOpgaver(env, kundeId),
+    produktValg(env),
+    cu(env, `/task/${kundeId}`).catch((e) => { console.error('Sælger kunne ikke hentes', e.detalje || e.message); return null; }),
+  ]);
+  const s = hoved && felt(hoved, CFG.F.saelger);
+  const u = Array.isArray(s) && s[0];
+  return {
+    aftaler: opgaver.map((t) => tilAftale(t, reserve)).sort((a, b) => (a.udloeb || Infinity) - (b.udloeb || Infinity)),
+    saelger: u ? { navn: u.username || u.email, initialer: u.initials || '', billede: u.profilePicture || null } : null,
+  };
 }
 
 // ---------- Opsig ----------
@@ -326,6 +337,7 @@ async function aftaler(env, kundeId) {
 // 2. Mail til bogholderiet (via Google Apps Script, se apps-script/Code.gs).
 // 3. En samlet kommentar skrives på kundeopgaven (hovedopgaven).
 // 4. Ved rene HOS/H0S-opsigelser tilføjes "Hjemmeside Admin" som assignee på hovedopgaven.
+// 5. Har hovedopgaven ingen due date, får den en (samme regel som supportformularen).
 
 const erHosting = (navn) => /^hos\+?$|hosting/i.test(String(navn).trim()); // HOS og HOS+, ikke H0S (nul)
 const erHosEllerH0s = (navn) => /^h[o0]s$/i.test(String(navn).trim()); // HOS og H0S (med nul)
@@ -337,6 +349,62 @@ const kunHos = (a) => a.produkter.length > 0 && a.produkter.every((p) => erHosEl
 // Tilføjer kun; eksisterende assignees bliver stående.
 const skalHaveHjemmesideAdmin = (valgte, alleAftaler) =>
   valgte.every(kunHos) || (alleAftaler.length === 1 && kunHos(alleAftaler[0]));
+
+// ---------- Due date (samme regel som supportformularen) ----------
+// Til og med kl. 12:00 dansk tid på en arbejdsdag = i dag, ellers næste arbejdsdag.
+// Weekender og danske helligdage springes over.
+
+function paaske(y) {
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4;
+  const f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const n = h + l - 7 * m + 114;
+  return Date.UTC(y, Math.floor(n / 31) - 1, (n % 31) + 1);
+}
+
+const HD = {};
+function helligdage(y) {
+  if (HD[y]) return HD[y];
+  const E = paaske(y), D = 86400000, iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+  HD[y] = new Set([
+    `${y}-01-01`, iso(E - 3 * D), iso(E - 2 * D), iso(E + D), iso(E + 39 * D), iso(E + 50 * D),
+    `${y}-06-05`, `${y}-12-24`, `${y}-12-25`, `${y}-12-26`, `${y}-12-31`,
+  ]);
+  return HD[y];
+}
+
+function idagKbh(nu = new Date()) {
+  const s = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Copenhagen' }).format(nu);
+  const [y, m, d] = s.split('-').map(Number);
+  return Date.UTC(y, m - 1, d, 12); // kl. 12 UTC undgår tidszoneskred
+}
+
+function minutterKbh(nu = new Date()) {
+  const [h, m] = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Copenhagen', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .format(nu).split(':').map(Number);
+  return h * 60 + m;
+}
+
+const erArbejdsdag = (ms) => {
+  const d = new Date(ms), dow = d.getUTCDay();
+  return dow !== 0 && dow !== 6 && !helligdage(d.getUTCFullYear()).has(d.toISOString().slice(0, 10));
+};
+
+function plusArbejdsdage(fraMs, n) {
+  let d = fraMs, talt = 0;
+  while (talt < n) {
+    d += 86400000;
+    if (erArbejdsdag(d)) talt++;
+  }
+  return d;
+}
+
+function dueDate(nu = new Date()) {
+  const idag = idagKbh(nu);
+  if (minutterKbh(nu) <= 12 * 60 && erArbejdsdag(idag)) return idag;
+  return plusArbejdsdage(idag, 1);
+}
 
 let GRUPPE_ID = null;
 async function hjemmesideAdminId(env) {
@@ -396,6 +464,20 @@ async function opsig(env, bruger, b) {
     }
   }
 
+  // Due date på hovedopgaven, kun hvis den ikke har en i forvejen
+  let dueSat = null, dueFejl = null;
+  try {
+    const hoved = await cu(env, `/task/${kunde.id}`);
+    if (!hoved.due_date) {
+      const due = dueDate();
+      await cu(env, `/task/${kunde.id}`, { method: 'PUT', body: JSON.stringify({ due_date: due, due_date_time: false }) });
+      dueSat = due;
+    }
+  } catch (e) {
+    dueFejl = 'OF-311';
+    console.error('OF-311', kunde.id, e.detalje || e.message);
+  }
+
   // 2. Mail til bogholderiet, efter ledelsens skabelon
   const info = await kundeInfo(env, kunde.id);
   const emne = `${info.navn}: Opsagte produkter: ${valgte.map(navn).join(', ')}`;
@@ -414,6 +496,7 @@ async function opsig(env, bruger, b) {
   const advarsel = [
     tagFejl.length ? `⚠️ Fik ikke 🪦: ${tagFejl.map(navn).join(', ')}. Sæt tagget i hånden.` : null,
     adminFejl ? `⚠️ ${CFG.HJEMMESIDE_ADMIN} kunne ikke sættes som assignee. Sæt dem på i hånden.` : null,
+    dueFejl ? '⚠️ Due date kunne ikke tjekkes eller sættes på kunden. Tjek den i hånden.' : null,
   ].filter(Boolean).join('\n') || null;
 
   const comment = [{ text: 'Følgende produkter er opsagt:' }, { text: '\n' }];
@@ -443,6 +526,8 @@ async function opsig(env, bruger, b) {
     mailFejl,
     adminTilfoejet,
     adminFejl,
+    dueSat,
+    dueFejl,
     kommentarFejl,
   };
 }

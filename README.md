@@ -31,7 +31,7 @@ Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigels
   ikke selv skal hente alle kunder fra ClickUp. Workeren skriver aldrig i KV.
 - Ingen cron-trigger nødvendig.
 
-"Opsig" gør fire ting:
+"Opsig" gør fem ting:
 
 1. Sætter tagget 🪦 på hver valgt Genfak-opgave (de andre tags, fx "udløber 26/27", bliver stående).
 2. Sender en mail til bogholderiet: emne `[Kunde]: Opsagte produkter: [Produkt, Produkt]`, en linje pr. produkt,
@@ -41,6 +41,11 @@ Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigels
 
 4. Sætter brugergruppen "Hjemmeside Admin" som ekstra assignee på hovedopgaven, når alle opsagte aftaler kun
    indeholder HOS/H0S, eller når kundens eneste Genfak-opgave kun indeholder HOS/H0S. (Tilføjer kun.)
+
+5. Sætter en due date på hovedopgaven, hvis den ikke har en: til og med kl. 12:00 på en arbejdsdag = i dag, ellers næste
+   arbejdsdag (weekender og helligdage springes over), som i supportformularen.
+
+Formularen viser også kundens sælger (feltet "Sælger" på hovedopgaven) under kundens navn.
 
 Workeren tilføjer altid kun: tags, assignees og kommentarer. Den fjerner eller erstatter aldrig noget.
 Aftaler der allerede har 🪦, kan ikke vælges.
@@ -61,7 +66,7 @@ Koden ligger i `apps-script/Code.gs`. Den udrulles fra den konto, mailene skal k
 |---|---|
 | `POST /api/login` `{ credential }` | `{ token, navn, email, billede, exp }`. Googles signatur tjekkes, og `hd` skal være `best-one.dk`. |
 | `GET /api/kunder` | `[{ id, navn, domaene, status, url }]` |
-| `GET /api/aftaler?kunde=<id>` | `[{ id, navn, produkter: [{ navn, farve }], vaerdi, udloeb, url }]` (kundens Genfak-underopgaver) |
+| `GET /api/aftaler?kunde=<id>` | `{ aftaler: [{ id, navn, produkter: [{ navn, farve }], vaerdi, udloeb, opsagt, url }], saelger: { navn } \| null }` |
 | `POST /api/opsig` `{ kundeId, aftaleIder: [...], stop: 'nu' \| 'udloeb', tilsendHjemmeside }` | `{ ok, antal }` |
 
 Fejl svares som `{ fejl, kode }` med fejlkoder `OF-xxx`.
