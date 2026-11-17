@@ -349,22 +349,27 @@ async function opsig(env, bruger, b) {
   tagResultat.forEach((r, i) => r.status === 'rejected' && console.error('OF-306', valgte[i].id, r.reason.detalje || r.reason.message));
   if (tagFejl.length === valgte.length) throw fejl('Aftalerne kunne ikke markeres som opsagt i ClickUp. Intet er ændret.', 502, 'OF-306', tagResultat[0].reason.detalje);
 
-  const dato = (ms) => new Date(ms).toLocaleDateString('da-DK', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Copenhagen' });
+  // Kommentar i hovedopgaven (kunden), efter ledelsens skabelon:
+  //   Følgende produkter er opsagt:
+  //   • [Produkt] (én linje pr. valgt aftale, linket til Genfak-opgaven)
+  //   Kunden stopper med det samme / Kunden stopper ved udløb
+  //   Skal hjemmesiden udleveres? Ja/Nej (kun når HOS er med)
+  //   _Opsigelsen er oprettet af [Bruger] og der er sendt mail til bogholderiet._
   const navn = (a) => a.produkter.map((p) => p.navn).join(', ') || a.navn;
-  const stopper = (a) => (b.stop === 'nu' ? 'nu' : a.udloeb ? `ved udløb ${dato(a.udloeb)}` : 'ved udløb (ingen udløbsdato i ClickUp)');
-  const titel = `🔴 Opsigelse | ${valgte.map(navn).join(' + ')}`;
-  const afslut = [
-    `Stopper: ${b.stop === 'nu' ? 'Nu (alle aftaler)' : 'Ved udløb (hver aftale på sin egen dato)'}`,
-    ...(hosting ? [`Tilsend hjemmesiden: ${b.tilsendHjemmeside ? 'Ja' : 'Nej'}`] : []),
+  const linjer = [
+    b.stop === 'nu' ? 'Kunden stopper med det samme' : 'Kunden stopper ved udløb',
+    ...(hosting ? [`Skal hjemmesiden udleveres? ${b.tilsendHjemmeside ? 'Ja' : 'Nej'}`] : []),
   ];
+  const underskrift = `Opsigelsen er oprettet af ${bruger.navn} og der er sendt mail til bogholderiet.`;
+  const advarsel = tagFejl.length ? `⚠️ Fik ikke 🪦: ${tagFejl.map(navn).join(', ')}. Sæt tagget i hånden.` : null;
 
-  // Formateret kommentar (ClickUp rich text): én linje pr. aftale med link, med almindelig tekst som reserve
-  const comment = [{ text: titel, attributes: { bold: true } }, { text: '\n' }];
+  const comment = [{ text: 'Følgende produkter er opsagt:' }, { text: '\n' }];
   for (const a of valgte) {
-    comment.push({ text: `• ${navn(a)}: stopper ${stopper(a)} ` }, { text: 'Åbn', attributes: { link: a.url } }, { text: '\n' });
+    comment.push({ text: navn(a), attributes: { link: a.url } }, { text: '\n', attributes: { list: { list: 'bullet' } } });
   }
-  comment.push({ text: '\n' + afslut.join('\n') + '\n\n' }, { text: `Registreret af ${bruger.navn} i opsigelsesformularen.`, attributes: { italic: true } }, { text: '\n' });
-  if (tagFejl.length) comment.push({ text: `\n⚠️ Fik ikke 🪦: ${tagFejl.map(navn).join(', ')}. Sæt tagget i hånden.\n` });
+  comment.push({ text: '\n' + linjer.join('\n') + '\n\n' }, { text: underskrift, attributes: { italic: true } }, { text: '\n' });
+  if (advarsel) comment.push({ text: '\n' + advarsel + '\n' });
+  const reserveTekst = ['Følgende produkter er opsagt:', ...valgte.map((a) => `• ${navn(a)}`), '', ...linjer, '', underskrift, ...(advarsel ? ['', advarsel] : [])].join('\n');
 
   // 2. Kommentar. Tags er sat på dette tidspunkt, så en fejl her stopper ikke opsigelsen.
   let kommentarFejl = null;
@@ -372,9 +377,7 @@ async function opsig(env, bruger, b) {
     try {
       await cu(env, `/task/${kunde.id}/comment`, { method: 'POST', body: JSON.stringify({ comment, notify_all: false }) });
     } catch {
-      const tekst = [titel, ...valgte.map((a) => `• ${navn(a)}: stopper ${stopper(a)} (${a.url})`), '', ...afslut, '', `Registreret af ${bruger.navn} i opsigelsesformularen.`,
-        ...(tagFejl.length ? ['', `⚠️ Fik ikke 🪦: ${tagFejl.map(navn).join(', ')}. Sæt tagget i hånden.`] : [])].join('\n');
-      await cu(env, `/task/${kunde.id}/comment`, { method: 'POST', body: JSON.stringify({ comment_text: tekst, notify_all: false }) });
+      await cu(env, `/task/${kunde.id}/comment`, { method: 'POST', body: JSON.stringify({ comment_text: reserveTekst, notify_all: false }) });
     }
   } catch (e) {
     kommentarFejl = 'OF-307';
