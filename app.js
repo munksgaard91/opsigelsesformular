@@ -313,6 +313,8 @@ function visKvittering(d, data) {
     </ul>
     ${!d.demo && Array.isArray(d.tagFejl) ? `<p class="forhaand">${d.antal === 1 ? 'Aftalen er' : 'Aftalerne er'} markeret med 🪦 i ClickUp${'mailFejl' in d && !d.mailFejl ? ', bogholderiet har fået en mail,' : ''} og der er skrevet en kommentar på kunden.</p>` : ''}
     ${d.mailFejl ? `<p class="obs">Mailen til bogholderiet kunne ikke sendes. Giv dem besked selv. (Fejlkode: ${esc(d.mailFejl)})</p>` : ''}
+    ${d.adminTilfoejet ? `<p class="forhaand">Hjemmeside Admin er sat på kunden, fordi opsigelsen kun gælder hjemmesiden.</p>` : ''}
+    ${d.adminFejl ? `<p class="obs">Hjemmeside Admin kunne ikke sættes på kunden. Gør det i hånden. (Fejlkode: ${esc(d.adminFejl)})</p>` : ''}
     ${!d.demo && !Array.isArray(d.tagFejl) ? `<p class="forhaand">Opsigelsen er skrevet som en kommentar på kunden.</p>` : ''}
     ${(d.tagFejl || []).length ? `<p class="obs">Disse aftaler fik ikke 🪦 og skal markeres i hånden: ${d.tagFejl.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.navn)}</a>`).join(', ')}. (Fejlkode: OF-306)</p>` : ''}
     ${d.kommentarFejl ? `<p class="obs">Kommentaren på kunden kunne ikke skrives, men aftalerne er markeret. (Fejlkode: ${esc(d.kommentarFejl)})</p>` : ''}

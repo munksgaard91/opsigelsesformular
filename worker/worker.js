@@ -17,6 +17,8 @@ const CFG = {
   KUNDER_LIST: '900800029468',
   KV_KUNDER: 'kunder-v2',       // supportformularens nøgle (læses kun, skrives aldrig herfra)
   GENFAK_TYPE_ID: 1008,         // opgavetypen "Genfak" = én aftale
+  TEAM_ID: '42640437',
+  HJEMMESIDE_ADMIN: 'Hjemmeside Admin', // brugergruppe i ClickUp; slås op på navnet
   TAG_OPSAGT: '🪦',             // findes i forvejen i ClickUp; sættes på opsagte Genfak-opgaver ved siden af "udløber xx/yy"
   CACHE_MINUTTER: 10,
   CLICKUP_URL: 'https://bestcrm.clickup.com',
@@ -323,8 +325,28 @@ async function aftaler(env, kundeId) {
 // 1. Hver valgt Genfak-opgave får tagget 🪦 (de andre tags, fx "udløber 26/27", bliver stående).
 // 2. Mail til bogholderiet (via Google Apps Script, se apps-script/Code.gs).
 // 3. En samlet kommentar skrives på kundeopgaven (hovedopgaven).
+// 4. Ved rene HOS/H0S-opsigelser tilføjes "Hjemmeside Admin" som assignee på hovedopgaven.
 
 const erHosting = (navn) => /^hos\+?$|hosting/i.test(String(navn).trim()); // HOS og HOS+, ikke H0S (nul)
+const erHosEllerH0s = (navn) => /^h[o0]s$/i.test(String(navn).trim()); // HOS og H0S (med nul)
+const kunHos = (a) => a.produkter.length > 0 && a.produkter.every((p) => erHosEllerH0s(p.navn));
+
+// "Hjemmeside Admin" som assignee på hovedopgaven, når
+//   A) alle de opsagte aftaler kun indeholder HOS/H0S, eller
+//   B) kunden kun har én Genfak-opgave, og den kun indeholder HOS/H0S.
+// Tilføjer kun; eksisterende assignees bliver stående.
+const skalHaveHjemmesideAdmin = (valgte, alleAftaler) =>
+  valgte.every(kunHos) || (alleAftaler.length === 1 && kunHos(alleAftaler[0]));
+
+let GRUPPE_ID = null;
+async function hjemmesideAdminId(env) {
+  if (GRUPPE_ID) return GRUPPE_ID;
+  const d = await cu(env, `/group?team_id=${CFG.TEAM_ID}`);
+  const g = (d.groups || []).find((x) => String(x.name).trim().toLowerCase() === CFG.HJEMMESIDE_ADMIN.toLowerCase());
+  if (!g) throw fejl('Gruppen findes ikke', 502, 'OF-310', `Ingen brugergruppe ved navn "${CFG.HJEMMESIDE_ADMIN}"`);
+  GRUPPE_ID = g.id;
+  return GRUPPE_ID;
+}
 
 // Nu = alle valgte aftaler stopper nu. Ved udløb = hver aftale stopper på sin egen udløbsdato.
 async function opsig(env, bruger, b) {
@@ -361,6 +383,19 @@ async function opsig(env, bruger, b) {
     b.stop === 'nu' ? 'Kunden stopper med det samme' : 'Kunden stopper ved udløb',
     ...(hosting ? [`Skal hjemmesiden udleveres? ${b.tilsendHjemmeside ? 'Ja' : 'Nej'}`] : []),
   ];
+  // Hjemmeside Admin (fejler det, fortsætter opsigelsen og det vises i kvitteringen)
+  let adminTilfoejet = false, adminFejl = null;
+  if (skalHaveHjemmesideAdmin(valgte, opgaver.map((o) => tilAftale(o, reserve)))) {
+    try {
+      const gruppe = await hjemmesideAdminId(env);
+      await cu(env, `/task/${kunde.id}`, { method: 'PUT', body: JSON.stringify({ group_assignees: { add: [gruppe], rem: [] } }) });
+      adminTilfoejet = true;
+    } catch (e) {
+      adminFejl = 'OF-310';
+      console.error('OF-310', kunde.id, e.detalje || e.message);
+    }
+  }
+
   // 2. Mail til bogholderiet, efter ledelsens skabelon
   const info = await kundeInfo(env, kunde.id);
   const emne = `${info.navn}: Opsagte produkter: ${valgte.map(navn).join(', ')}`;
@@ -376,7 +411,10 @@ async function opsig(env, bruger, b) {
   const underskrift = mailFejl
     ? `Opsigelsen er oprettet af ${bruger.navn}. OBS: Mailen til bogholderiet kunne ikke sendes, giv dem besked.`
     : `Opsigelsen er oprettet af ${bruger.navn} og der er sendt mail til bogholderiet.`;
-  const advarsel = tagFejl.length ? `⚠️ Fik ikke 🪦: ${tagFejl.map(navn).join(', ')}. Sæt tagget i hånden.` : null;
+  const advarsel = [
+    tagFejl.length ? `⚠️ Fik ikke 🪦: ${tagFejl.map(navn).join(', ')}. Sæt tagget i hånden.` : null,
+    adminFejl ? `⚠️ ${CFG.HJEMMESIDE_ADMIN} kunne ikke sættes som assignee. Sæt dem på i hånden.` : null,
+  ].filter(Boolean).join('\n') || null;
 
   const comment = [{ text: 'Følgende produkter er opsagt:' }, { text: '\n' }];
   for (const a of valgte) {
@@ -403,6 +441,8 @@ async function opsig(env, bruger, b) {
     antal: valgte.length,
     tagFejl: tagFejl.map((a) => ({ id: a.id, navn: navn(a), url: a.url })),
     mailFejl,
+    adminTilfoejet,
+    adminFejl,
     kommentarFejl,
   };
 }

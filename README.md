@@ -31,7 +31,7 @@ Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigels
   ikke selv skal hente alle kunder fra ClickUp. Workeren skriver aldrig i KV.
 - Ingen cron-trigger nødvendig.
 
-"Opsig" gør tre ting:
+"Opsig" gør fire ting:
 
 1. Sætter tagget 🪦 på hver valgt Genfak-opgave (de andre tags, fx "udløber 26/27", bliver stående).
 2. Sender en mail til bogholderiet: emne `[Kunde]: Opsagte produkter: [Produkt, Produkt]`, en linje pr. produkt,
@@ -39,6 +39,10 @@ Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigels
 3. Skriver en kommentar i hovedopgaven (kunden) med de opsagte produkter, hvornår kunden stopper og,
    hvis HOS er med, om hjemmesiden skal udleveres.
 
+4. Sætter brugergruppen "Hjemmeside Admin" som ekstra assignee på hovedopgaven, når alle opsagte aftaler kun
+   indeholder HOS/H0S, eller når kundens eneste Genfak-opgave kun indeholder HOS/H0S. (Tilføjer kun.)
+
+Workeren tilføjer altid kun: tags, assignees og kommentarer. Den fjerner eller erstatter aldrig noget.
 Aftaler der allerede har 🪦, kan ikke vælges.
 
 ## Mail via Google Apps Script
