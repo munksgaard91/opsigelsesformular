@@ -1,5 +1,6 @@
 // Opsigelsesformular: sender mail til bogholderiet, når en opsigelse er lavet.
-// Kaldes af Cloudflare-workeren "opsigelsesformular". Mailen sendes fra den Google-konto, der udruller scriptet.
+// Kaldes af Cloudflare-workeren "opsigelsesformular". Mailen sendes fra Gmail på den konto, der udruller
+// scriptet (bestcrm@best-one.dk), og ligger bagefter i kontoens Sendt-mappe.
 //
 // Script properties (Projektindstillinger > Script properties), aldrig i koden:
 //   HEMMELIGHED  samme lange tilfældige tekst som MAIL_SECRET i Cloudflare
@@ -24,16 +25,11 @@ function doPost(e) {
   if (!til) return svar({ ok: false, fejl: 'MODTAGER er ikke sat i scriptets indstillinger' });
   if (!d.emne || !d.tekst) return svar({ ok: false, fejl: 'Emne eller tekst mangler' });
 
-  const mail = {
-    to: til,
-    subject: String(d.emne).slice(0, 250),
-    body: String(d.tekst),
-    name: 'Opsigelsesformular',
-  };
+  const valg = { name: 'BestCRM' };
   // Svar går til den medarbejder der lavede opsigelsen
-  if (/^[^\s@]+@best-one\.dk$/i.test(String(d.svarTil || ''))) mail.replyTo = d.svarTil;
+  if (/^[^\s@]+@best-one\.dk$/i.test(String(d.svarTil || ''))) valg.replyTo = d.svarTil;
 
-  MailApp.sendEmail(mail);
+  GmailApp.sendEmail(til, String(d.emne).slice(0, 250), String(d.tekst), valg);
   return svar({ ok: true });
 }
 
@@ -45,5 +41,5 @@ function svar(o) {
 function testMail() {
   const til = PropertiesService.getScriptProperties().getProperty('MODTAGER');
   if (!til) throw new Error('Sæt MODTAGER under Projektindstillinger > Script properties først');
-  MailApp.sendEmail({ to: Session.getActiveUser().getEmail(), subject: 'Test: Opsigelsesformular', body: 'Scriptet kan sende mail. Rigtige mails går til: ' + til, name: 'Opsigelsesformular' });
+  GmailApp.sendEmail(Session.getActiveUser().getEmail(), 'Test: Opsigelsesformular', 'Scriptet kan sende mail. Rigtige mails går til: ' + til, { name: 'BestCRM' });
 }
