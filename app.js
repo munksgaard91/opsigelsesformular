@@ -215,7 +215,7 @@ function tegnAftaler() {
 }
 
 // Felter der afhænger af de valgte aftaler
-const erHosting = (navn) => /^hos\+?$|hosting/i.test(String(navn).trim()); // HOS og HOS+ (ikke H0S med nul)
+const erHosting = (navn) => /^h[o0]s\+?$|hosting/i.test(String(navn).trim()); // hostingaftaler: HOS, H0S (med nul) og HOS+
 const opsigerHosting = () => S.valgte.some((a) => (a.produkter || []).some((p) => erHosting(p.navn)));
 const aftaleNavn = (a) => (a.produkter || []).map((p) => p.navn).join(', ') || a.navn;
 function opdaterAfhaengige() {

@@ -12,7 +12,7 @@ Ligger på https://opsigelse.leksione.dk og kræver login med en best-one.dk Goo
 1. Vælg kunden (søgning i Kunder-listen).
 2. Vælg én eller flere Genfak-aftaler.
 3. Hvornår kunden stopper: "Nu" = alle valgte aftaler stopper nu. "Ved udløb" = hver aftale stopper på sin egen
-   udløbsdato (feltet Deadline). Er HOS med, spørges der om kunden skal have tilsendt hjemmesiden.
+   udløbsdato (feltet Deadline). Er en hostingaftale med (HOS, H0S eller HOS+), spørges der om hjemmesiden skal udleveres.
 4. "Opsig".
 
 ## Test lokalt

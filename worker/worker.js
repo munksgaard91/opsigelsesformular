@@ -347,7 +347,7 @@ async function aftaler(env, kundeId) {
 // 4. Ved rene HOS/H0S-opsigelser tilføjes "Hjemmeside Admin" som assignee på hovedopgaven.
 // 5. Har hovedopgaven ingen due date, får den en (samme regel som supportformularen).
 
-const erHosting = (navn) => /^hos\+?$|hosting/i.test(String(navn).trim()); // HOS og HOS+, ikke H0S (nul)
+const erHosting = (navn) => /^h[o0]s\+?$|hosting/i.test(String(navn).trim()); // hostingaftaler: HOS, H0S (med nul) og HOS+
 const erHosEllerH0s = (navn) => /^h[o0]s$/i.test(String(navn).trim()); // HOS og H0S (med nul)
 const kunHos = (a) => a.produkter.length > 0 && a.produkter.every((p) => erHosEllerH0s(p.navn));
 
