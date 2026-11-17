@@ -215,7 +215,8 @@ function tegnAftaler() {
 }
 
 // Felter der afhænger af de valgte aftaler
-const erHosting = (navn) => /^h[o0]s\+?$|hosting/i.test(String(navn).trim()); // hostingaftaler: HOS, H0S (med nul) og HOS+
+// Hostingaftaler med hjemmeside: H0S (gamle Enfold-sider), HOS (Bricks) og HOS+ (større Bricks-sider)
+const erHosting = (navn) => /^h[o0]s\+?$|hosting/i.test(String(navn).trim());
 const opsigerHosting = () => S.valgte.some((a) => (a.produkter || []).some((p) => erHosting(p.navn)));
 const aftaleNavn = (a) => (a.produkter || []).map((p) => p.navn).join(', ') || a.navn;
 function opdaterAfhaengige() {

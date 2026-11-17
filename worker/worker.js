@@ -344,16 +344,17 @@ async function aftaler(env, kundeId) {
 // 1. Hver valgt Genfak-opgave får tagget 🪦 (de andre tags, fx "udløber 26/27", bliver stående).
 // 2. Mail til bogholderiet (via Google Apps Script, se apps-script/Code.gs).
 // 3. En samlet kommentar skrives på kundeopgaven (hovedopgaven).
-// 4. Ved rene HOS/H0S-opsigelser tilføjes "Hjemmeside Admin" som assignee på hovedopgaven.
+// 4. Ved rene hosting-opsigelser (HOS/H0S/HOS+) tilføjes "Hjemmeside Admin" som assignee på hovedopgaven.
 // 5. Har hovedopgaven ingen due date, får den en (samme regel som supportformularen).
 
-const erHosting = (navn) => /^h[o0]s\+?$|hosting/i.test(String(navn).trim()); // hostingaftaler: HOS, H0S (med nul) og HOS+
-const erHosEllerH0s = (navn) => /^h[o0]s$/i.test(String(navn).trim()); // HOS og H0S (med nul)
-const kunHos = (a) => a.produkter.length > 0 && a.produkter.every((p) => erHosEllerH0s(p.navn));
+// Hostingaftaler med hjemmeside, behandles ens overalt:
+//   H0S = gamle Enfold-sider, HOS = almindelige Bricks-sider, HOS+ = større Bricks-sider
+const erHosting = (navn) => /^h[o0]s\+?$|hosting/i.test(String(navn).trim());
+const kunHos = (a) => a.produkter.length > 0 && a.produkter.every((p) => erHosting(p.navn));
 
 // "Hjemmeside Admin" som assignee på hovedopgaven, når
-//   A) alle de opsagte aftaler kun indeholder HOS/H0S, eller
-//   B) kunden kun har én Genfak-opgave, og den kun indeholder HOS/H0S.
+//   A) alle de opsagte aftaler kun er hosting (HOS, H0S, HOS+), eller
+//   B) kunden kun har én Genfak-opgave, og den kun er hosting.
 // Tilføjer kun; eksisterende assignees bliver stående.
 const skalHaveHjemmesideAdmin = (valgte, alleAftaler) =>
   valgte.every(kunHos) || (alleAftaler.length === 1 && kunHos(alleAftaler[0]));

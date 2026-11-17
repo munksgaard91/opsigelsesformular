@@ -39,8 +39,8 @@ Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigels
 3. Skriver en kommentar i hovedopgaven (kunden) med de opsagte produkter, hvornår kunden stopper og,
    hvis HOS er med, om hjemmesiden skal udleveres.
 
-4. Sætter brugergruppen "Hjemmeside Admin" som ekstra assignee på hovedopgaven, når alle opsagte aftaler kun
-   indeholder HOS/H0S, eller når kundens eneste Genfak-opgave kun indeholder HOS/H0S. (Tilføjer kun.)
+4. Sætter brugergruppen "Hjemmeside Admin" som ekstra assignee på hovedopgaven, når alle opsagte aftaler kun er hosting
+   (HOS, H0S, HOS+), eller når kundens eneste Genfak-opgave kun er hosting. (Tilføjer kun.)
 
 5. Sætter en due date på hovedopgaven, hvis den ikke har en: til og med kl. 12:00 på en arbejdsdag = i dag, ellers næste
    arbejdsdag (weekender og helligdage springes over), som i supportformularen.
