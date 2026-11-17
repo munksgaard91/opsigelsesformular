@@ -18,7 +18,8 @@ const saeson = (ms) => {
 };
 function saesonKlasse(udloeb) {
   if (!udloeb) return { klasse: '', titel: '' };
-  if (+udloeb < Date.now()) return { klasse: 'denne', titel: 'Udløbet' };
+  const dag = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(+ms)); // YYYY-MM-DD i dansk tid
+  if (dag(udloeb) < dag(Date.now())) return { klasse: 'denne', titel: 'Udløbet' };
   const nu = saeson(Date.now()), forskel = saeson(udloeb) - nu;
   const navn = (s) => `${s}/${String(s + 1).slice(2)}`;
   if (forskel <= 0) return { klasse: 'denne', titel: `Udløber i indeværende sæson (${navn(nu)})` };
@@ -216,7 +217,7 @@ function tegnAftaler() {
 
 // Felter der afhænger af de valgte aftaler
 // Hostingaftaler med hjemmeside: H0S (gamle Enfold-sider), HOS (Bricks) og HOS+ (større Bricks-sider)
-const erHosting = (navn) => /^h[o0]s\+?$|hosting/i.test(String(navn).trim());
+const erHosting = (navn) => /^h[o0]s\+?$/i.test(String(navn).trim()); // præcis HOS, H0S eller HOS+
 const opsigerHosting = () => S.valgte.some((a) => (a.produkter || []).some((p) => erHosting(p.navn)));
 const aftaleNavn = (a) => (a.produkter || []).map((p) => p.navn).join(', ') || a.navn;
 function opdaterAfhaengige() {
@@ -320,7 +321,10 @@ $('#opsig').addEventListener('click', async () => {
     if (['OF-401', 'OF-402'].includes(e.kode) && S.kunde && S.kunde.id === data.kundeId) {
       AFTALE_CACHE.delete(data.kundeId);
       const fejlTekst = fejl.textContent;
-      vaelgKunde(S.kunde).then(() => { fejl.textContent = fejlTekst.replace(' Genindlæs siden.', '').replace(' Genindlæs siden og prøv igen.', '') + ' Aftalerne er hentet igen.'; });
+      vaelgKunde(S.kunde).then(() => {
+        if (!S.kunde || S.kunde.id !== data.kundeId || !Array.isArray(S.aftaler)) return; // skiftet kunde eller hentning fejlede
+        fejl.textContent = fejlTekst.replace(' Genindlæs siden og prøv igen.', '').replace(' Genindlæs siden.', '') + ' Aftalerne er hentet igen.';
+      });
     }
   } finally {
     form.inert = false;

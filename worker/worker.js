@@ -94,7 +94,7 @@ async function googleNoegler(tving) {
   const r = await fetch('https://www.googleapis.com/oauth2/v3/certs');
   const d = r.ok ? await r.json().catch(() => null) : null;
   if (!d || !Array.isArray(d.keys)) throw fejl('Google-login svarer ikke lige nu. Prøv igen om lidt.', 503, 'OF-108', `JWKS ${r.status}`);
-  JWKS = { t: Date.now(), keys: d.keys }; // gamle nøgler beholdes, hvis hentningen fejler
+  JWKS = { t: Date.now(), keys: d.keys }; // fejler hentningen, afvises dette login, og næste forsøg henter igen
   return JWKS.keys;
 }
 
@@ -111,7 +111,8 @@ async function login(env, credential) {
   if (!jwk) jwk = (await googleNoegler(true)).find((k) => k.kid === header.kid); // Google har skiftet nøgle
   if (!jwk || header.alg !== 'RS256') throw fejl('Ugyldigt login.', 401, 'OF-102', 'Ukendt nøgle eller algoritme');
   const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
-  const ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, b64url.fra(sig), new TextEncoder().encode(`${h}.${p}`));
+  let ok = false;
+  try { ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, b64url.fra(sig), new TextEncoder().encode(`${h}.${p}`)); } catch { ok = false; }
 
   const nu = Math.floor(Date.now() / 1000);
   if (!ok) throw fejl('Ugyldigt login.', 401, 'OF-102', 'Signatur passer ikke');
@@ -349,7 +350,7 @@ async function aftaler(env, kundeId) {
 
 // Hostingaftaler med hjemmeside, behandles ens overalt:
 //   H0S = gamle Enfold-sider, HOS = almindelige Bricks-sider, HOS+ = større Bricks-sider
-const erHosting = (navn) => /^h[o0]s\+?$|hosting/i.test(String(navn).trim());
+const erHosting = (navn) => /^h[o0]s\+?$/i.test(String(navn).trim()); // præcis HOS, H0S eller HOS+
 const kunHos = (a) => a.produkter.length > 0 && a.produkter.every((p) => erHosting(p.navn));
 
 // "Hjemmeside Admin" som assignee på hovedopgaven, når
@@ -357,7 +358,8 @@ const kunHos = (a) => a.produkter.length > 0 && a.produkter.every((p) => erHosti
 //   B) kunden er en ren hostingkunde: ingen af kundens Genfak-aftaler har andre produkter end hosting.
 // Ellers ikke. Tilføjer kun; eksisterende assignees bliver stående.
 const skalHaveHjemmesideAdmin = (valgte, alleAftaler) =>
-  valgte.every(kunHos) || (alleAftaler.length > 0 && alleAftaler.every(kunHos));
+  valgte.every(kunHos) ||
+  (alleAftaler.every((x) => x.produkter.every((p) => erHosting(p.navn))) && alleAftaler.some((x) => x.produkter.some((p) => erHosting(p.navn))));
 
 // ---------- Due date (samme regel som supportformularen) ----------
 // Til og med kl. 12:00 dansk tid på en arbejdsdag = i dag, ellers næste arbejdsdag.
@@ -440,7 +442,7 @@ async function opsig(env, bruger, b) {
   const valgte = aftaler.map((o) => tilAftale(o, reserve)).sort((x, y) => (x.udloeb || Infinity) - (y.udloeb || Infinity));
   if (valgte.some((a) => a.opsagt)) throw fejl('En af aftalerne er allerede opsagt (🪦). Genindlæs siden.', 400, 'OF-402');
   // Kunne produkterne ikke slås op, ville HOS-reglerne og hjemmeside-spørgsmålet blive sprunget over i stilhed
-  const ukendte = aftaler.filter((o, i) => !valgte.find((a) => a.id === o.id).produkter.length && (felt(o, CFG.F.produkter) || []).length);
+  const ukendte = aftaler.filter((o) => valgte.find((a) => a.id === o.id).produkter.length !== (felt(o, CFG.F.produkter) || []).length);
   if (ukendte.length) throw fejl('Produkterne på en aftale kunne ikke læses fra BestCRM. Intet er ændret. Prøv igen om lidt.', 502, 'OF-312', ukendte.map((o) => o.id).join(','));
   const hosting = valgte.some((a) => a.produkter.some((p) => erHosting(p.navn)));
   if (hosting && typeof b.tilsendHjemmeside !== 'boolean') throw fejl('Vælg om kunden skal have tilsendt hjemmesiden.', 400, 'OF-400');
@@ -497,7 +499,11 @@ async function opsig(env, bruger, b) {
   });
   const emne = `${info.navn}: Opsagte produkter: ${valgte.map(navn).join(', ')}`;
   // Hvornår kunden stopper: nu = dags dato for alle; ved udløb = hver aftales egen udløbsdato
-  const datoDK = (ms) => new Date(ms).toLocaleDateString('da-DK', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Copenhagen' });
+  const datoDK = (ms) => {
+    // Bygges selv, så det ikke afhænger af dansk sprogdata i Cloudflare
+    const [y, m, d] = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Copenhagen' }).format(new Date(+ms)).split('-').map(Number);
+    return `${d}. ${['januar', 'februar', 'marts', 'april', 'maj', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'december'][m - 1]} ${y}`;
+  };
   const mailTekst = [
     `${info.navn} har opsagt følgende produkter`,
     ...valgte.map((a) => (b.stop === 'nu' ? navn(a) : `${navn(a)}: stopper ved udløb ${a.udloeb ? datoDK(a.udloeb) : '(ingen udløbsdato i BestCRM)'}`)),

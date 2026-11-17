@@ -17,7 +17,7 @@ Ligger på https://opsigelse.leksione.dk og kræver login med en best-one.dk Goo
 
 ## Test lokalt
 
-Åbn siden fra `localhost` eller med `?demo` i adressen. Så kører den med opdigtede testdata og uden login,
+Åbn siden fra `localhost` (fx `python3 -m http.server`). Så kører den med opdigtede testdata og uden login,
 og der sendes intet til ClickUp.
 
 ## Worker
@@ -37,7 +37,7 @@ Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigels
 2. Sender en mail til bogholderiet: emne `[Kunde]: Opsagte produkter: [Produkt, Produkt]`, en linje pr. produkt med stopdato,
    link til hovedopgaven og hvem der oprettede opsigelsen.
 3. Skriver en kommentar i hovedopgaven (kunden) med de opsagte produkter, hvornår kunden stopper og,
-   hvis HOS er med, om hjemmesiden skal udleveres.
+   hvis en hostingaftale (HOS, H0S, HOS+) er med, om hjemmesiden skal udleveres.
 
 4. Sætter brugergruppen "Hjemmeside Admin" som ekstra assignee på hovedopgaven, når alle opsagte aftaler kun er hosting
    (HOS, H0S, HOS+), eller når kunden er en ren hostingkunde (ingen andre produkter på nogen Genfak). Ellers ikke.
