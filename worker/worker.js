@@ -353,11 +353,11 @@ const erHosting = (navn) => /^h[o0]s\+?$|hosting/i.test(String(navn).trim());
 const kunHos = (a) => a.produkter.length > 0 && a.produkter.every((p) => erHosting(p.navn));
 
 // "Hjemmeside Admin" som assignee på hovedopgaven, når
-//   A) alle de opsagte aftaler kun er hosting (HOS, H0S, HOS+), eller
-//   B) kunden kun har én Genfak-opgave, og den kun er hosting.
-// Tilføjer kun; eksisterende assignees bliver stående.
+//   A) der KUN er opsagt hosting (HOS, H0S, HOS+), eller
+//   B) kunden er en ren hostingkunde: ingen af kundens Genfak-aftaler har andre produkter end hosting.
+// Ellers ikke. Tilføjer kun; eksisterende assignees bliver stående.
 const skalHaveHjemmesideAdmin = (valgte, alleAftaler) =>
-  valgte.every(kunHos) || (alleAftaler.length === 1 && kunHos(alleAftaler[0]));
+  valgte.every(kunHos) || (alleAftaler.length > 0 && alleAftaler.every(kunHos));
 
 // ---------- Due date (samme regel som supportformularen) ----------
 // Til og med kl. 12:00 dansk tid på en arbejdsdag = i dag, ellers næste arbejdsdag.
@@ -496,9 +496,13 @@ async function opsig(env, bruger, b) {
     return { navn: kunde.name || `Kunde ${kunde.id}`, url: `${CFG.CLICKUP_URL}/t/${kunde.id}` };
   });
   const emne = `${info.navn}: Opsagte produkter: ${valgte.map(navn).join(', ')}`;
+  // Hvornår kunden stopper: nu = dags dato for alle; ved udløb = hver aftales egen udløbsdato
+  const datoDK = (ms) => new Date(ms).toLocaleDateString('da-DK', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Copenhagen' });
   const mailTekst = [
     `${info.navn} har opsagt følgende produkter`,
-    ...valgte.map(navn),
+    ...valgte.map((a) => (b.stop === 'nu' ? navn(a) : `${navn(a)}: stopper ved udløb ${a.udloeb ? datoDK(a.udloeb) : '(ingen udløbsdato i BestCRM)'}`)),
+    '',
+    b.stop === 'nu' ? `Kunden stopper med det samme (${datoDK(Date.now())})` : 'Kunden stopper ved udløb af hver aftale',
     '',
     `Link til BestCRM: ${info.url}`,
     `Opsigelsen er oprettet af ${bruger.navn}`,

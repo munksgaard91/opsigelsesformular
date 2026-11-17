@@ -34,13 +34,13 @@ Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigels
 "Opsig" gør fem ting:
 
 1. Sætter tagget 🪦 på hver valgt Genfak-opgave (de andre tags, fx "udløber 26/27", bliver stående).
-2. Sender en mail til bogholderiet: emne `[Kunde]: Opsagte produkter: [Produkt, Produkt]`, en linje pr. produkt,
+2. Sender en mail til bogholderiet: emne `[Kunde]: Opsagte produkter: [Produkt, Produkt]`, en linje pr. produkt med stopdato,
    link til hovedopgaven og hvem der oprettede opsigelsen.
 3. Skriver en kommentar i hovedopgaven (kunden) med de opsagte produkter, hvornår kunden stopper og,
    hvis HOS er med, om hjemmesiden skal udleveres.
 
 4. Sætter brugergruppen "Hjemmeside Admin" som ekstra assignee på hovedopgaven, når alle opsagte aftaler kun er hosting
-   (HOS, H0S, HOS+), eller når kundens eneste Genfak-opgave kun er hosting. (Tilføjer kun.)
+   (HOS, H0S, HOS+), eller når kunden er en ren hostingkunde (ingen andre produkter på nogen Genfak). Ellers ikke.
 
 5. Sætter en due date på hovedopgaven, hvis den ikke har en: til og med kl. 12:00 på en arbejdsdag = i dag, ellers næste
    arbejdsdag (weekender og helligdage springes over), som i supportformularen.
