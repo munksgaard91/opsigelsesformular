@@ -25,13 +25,31 @@ og der sendes intet til ClickUp.
 Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigelsesformular`
 (Workers & Pages > opsigelsesformular > Edit code). Den er bygget efter samme mønster som supportformularens worker.
 
-- Secrets: `CLICKUP_TOKEN` og `SESSION_SECRET`
+- Secrets: `CLICKUP_TOKEN`, `SESSION_SECRET`, `MAIL_URL` og `MAIL_SECRET`
 - KV-binding: `KUNDER_KV` = **samme** KV-navnerum som supportformularen. Kundelisten læses derfra
   (nøglen `kunder-v2`, opdateres hver time af supportformularens cron), så opsigelsesformularen
   ikke selv skal hente alle kunder fra ClickUp. Workeren skriver aldrig i KV.
 - Ingen cron-trigger nødvendig.
 
-"Opsig" sætter tagget 🪦 på hver valgt Genfak-opgave (de andre tags, fx "udløber 26/27", bliver stående) og skriver en samlet kommentar på kundeopgaven. Aftaler der allerede har 🪦, kan ikke vælges.
+"Opsig" gør tre ting:
+
+1. Sætter tagget 🪦 på hver valgt Genfak-opgave (de andre tags, fx "udløber 26/27", bliver stående).
+2. Sender en mail til bogholderiet: emne `[Kunde]: Opsagte produkter: [Produkt, Produkt]`, en linje pr. produkt,
+   link til hovedopgaven og hvem der oprettede opsigelsen.
+3. Skriver en kommentar i hovedopgaven (kunden) med de opsagte produkter, hvornår kunden stopper og,
+   hvis HOS er med, om hjemmesiden skal udleveres.
+
+Aftaler der allerede har 🪦, kan ikke vælges.
+
+## Mail via Google Apps Script
+
+Koden ligger i `apps-script/Code.gs`. Den udrulles fra den konto, mailene skal komme fra (bestcrm@best-one.dk):
+
+1. Opret et nyt Apps Script-projekt på script.google.com og indsæt `Code.gs`.
+2. Projektindstillinger > Script properties: `HEMMELIGHED` (samme værdi som `MAIL_SECRET` i Cloudflare) og
+   `MODTAGER` (bogholderiets adresse). Adressen ligger kun dér, ikke i repoet.
+3. Kør `testMail` én gang og godkend adgangen.
+4. Implementér > Ny implementering > Webapp, udfør som "Mig", adgang "Alle". Adressen sættes som `MAIL_URL` i Cloudflare.
 
 ## Workerens API
 

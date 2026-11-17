@@ -311,7 +311,8 @@ function visKvittering(d, data) {
       ${S.valgte.map((a) => `<li><b>${esc(aftaleNavn(a))}:</b> stopper ${data.stop === 'nu' ? 'nu' : a.udloeb ? `ved udløb ${esc(dato(a.udloeb))}` : 'ved udløb (ingen dato i ClickUp)'}</li>`).join('')}
       ${data.tilsendHjemmeside === null ? '' : `<li><b>Tilsend hjemmesiden:</b> ${data.tilsendHjemmeside ? 'Ja' : 'Nej'}</li>`}
     </ul>
-    ${!d.demo && Array.isArray(d.tagFejl) ? `<p class="forhaand">${d.antal === 1 ? 'Aftalen er' : 'Aftalerne er'} markeret med 🪦 i ClickUp, og der er skrevet en kommentar på kunden.</p>` : ''}
+    ${!d.demo && Array.isArray(d.tagFejl) ? `<p class="forhaand">${d.antal === 1 ? 'Aftalen er' : 'Aftalerne er'} markeret med 🪦 i ClickUp${'mailFejl' in d && !d.mailFejl ? ', bogholderiet har fået en mail,' : ''} og der er skrevet en kommentar på kunden.</p>` : ''}
+    ${d.mailFejl ? `<p class="obs">Mailen til bogholderiet kunne ikke sendes. Giv dem besked selv. (Fejlkode: ${esc(d.mailFejl)})</p>` : ''}
     ${!d.demo && !Array.isArray(d.tagFejl) ? `<p class="forhaand">Opsigelsen er skrevet som en kommentar på kunden.</p>` : ''}
     ${(d.tagFejl || []).length ? `<p class="obs">Disse aftaler fik ikke 🪦 og skal markeres i hånden: ${d.tagFejl.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.navn)}</a>`).join(', ')}. (Fejlkode: OF-306)</p>` : ''}
     ${d.kommentarFejl ? `<p class="obs">Kommentaren på kunden kunne ikke skrives, men aftalerne er markeret. (Fejlkode: ${esc(d.kommentarFejl)})</p>` : ''}
@@ -466,7 +467,7 @@ async function demoApi(sti) {
       { id: 'g4', navn: 'Genfak META', produkter: [{ navn: 'META', farve: '#3e63dd' }], vaerdi: 12000, udloeb: om(2), opsagt: true, url: '' },
     ];
   }
-  if (sti === '/api/opsig') return { demo: true, ok: true, antal: S.valgte.length, tagFejl: [], kommentarFejl: null };
+  if (sti === '/api/opsig') return { demo: true, ok: true, antal: S.valgte.length, tagFejl: [], mailFejl: null, kommentarFejl: null };
   throw fejlMedKode('Ukendt adresse i demo.', 'OF-404');
 }
 

@@ -4,7 +4,7 @@
 //   2. henter kunder (fra supportformularens KV) og kundens Genfak-aftaler fra ClickUp
 //   3. registrerer opsigelsen (indtil videre kun som kommentar på kundeopgaven)
 //
-// Secrets i Cloudflare: CLICKUP_TOKEN, SESSION_SECRET
+// Secrets i Cloudflare: CLICKUP_TOKEN, SESSION_SECRET, MAIL_URL (Apps Script-webappens adresse), MAIL_SECRET
 // KV-binding: KUNDER_KV = SAMME navnerum som supportformularen. Supportens cron
 //   opdaterer kundelisten hver time, så denne worker behøver ingen cron.
 // Bygget efter samme mønster som supportformularens worker.
@@ -321,7 +321,8 @@ async function aftaler(env, kundeId) {
 
 // ---------- Opsig ----------
 // 1. Hver valgt Genfak-opgave får tagget 🪦 (de andre tags, fx "udløber 26/27", bliver stående).
-// 2. En samlet kommentar skrives på kundeopgaven.
+// 2. Mail til bogholderiet (via Google Apps Script, se apps-script/Code.gs).
+// 3. En samlet kommentar skrives på kundeopgaven (hovedopgaven).
 
 const erHosting = (navn) => /^hos\+?$|hosting/i.test(String(navn).trim()); // HOS og HOS+, ikke H0S (nul)
 
@@ -360,7 +361,21 @@ async function opsig(env, bruger, b) {
     b.stop === 'nu' ? 'Kunden stopper med det samme' : 'Kunden stopper ved udløb',
     ...(hosting ? [`Skal hjemmesiden udleveres? ${b.tilsendHjemmeside ? 'Ja' : 'Nej'}`] : []),
   ];
-  const underskrift = `Opsigelsen er oprettet af ${bruger.navn} og der er sendt mail til bogholderiet.`;
+  // 2. Mail til bogholderiet, efter ledelsens skabelon
+  const info = await kundeInfo(env, kunde.id);
+  const emne = `${info.navn}: Opsagte produkter: ${valgte.map(navn).join(', ')}`;
+  const mailTekst = [
+    `${info.navn} har opsagt følgende produkter`,
+    ...valgte.map(navn),
+    '',
+    `Link til BestCRM: ${info.url}`,
+    `Opsigelsen er oprettet af ${bruger.navn}`,
+  ].join('\n');
+  const mailFejl = await sendMail(env, { emne, tekst: mailTekst, svarTil: bruger.email });
+
+  const underskrift = mailFejl
+    ? `Opsigelsen er oprettet af ${bruger.navn}. OBS: Mailen til bogholderiet kunne ikke sendes, giv dem besked.`
+    : `Opsigelsen er oprettet af ${bruger.navn} og der er sendt mail til bogholderiet.`;
   const advarsel = tagFejl.length ? `⚠️ Fik ikke 🪦: ${tagFejl.map(navn).join(', ')}. Sæt tagget i hånden.` : null;
 
   const comment = [{ text: 'Følgende produkter er opsagt:' }, { text: '\n' }];
@@ -371,7 +386,7 @@ async function opsig(env, bruger, b) {
   if (advarsel) comment.push({ text: '\n' + advarsel + '\n' });
   const reserveTekst = ['Følgende produkter er opsagt:', ...valgte.map((a) => `• ${navn(a)}`), '', ...linjer, '', underskrift, ...(advarsel ? ['', advarsel] : [])].join('\n');
 
-  // 2. Kommentar. Tags er sat på dette tidspunkt, så en fejl her stopper ikke opsigelsen.
+  // 3. Kommentar. Tags er sat på dette tidspunkt, så en fejl her stopper ikke opsigelsen.
   let kommentarFejl = null;
   try {
     try {
@@ -387,6 +402,39 @@ async function opsig(env, bruger, b) {
     ok: true,
     antal: valgte.length,
     tagFejl: tagFejl.map((a) => ({ id: a.id, navn: navn(a), url: a.url })),
+    mailFejl,
     kommentarFejl,
   };
+}
+
+// Kundens navn og link til hovedopgaven: fra kundelisten, ellers direkte fra ClickUp
+async function kundeInfo(env, kundeId) {
+  try {
+    const k = (await kunder(env, false)).find((x) => x.id === kundeId);
+    if (k) return { navn: k.navn, url: k.url };
+  } catch {}
+  const t = await cu(env, `/task/${kundeId}`);
+  return { navn: t.name, url: cuLink(t.url) };
+}
+
+// Sender mailen via Google Apps Script. Returnerer null, hvis den blev sendt, ellers en fejlkode.
+async function sendMail(env, { emne, tekst, svarTil }) {
+  if (!env.MAIL_URL || !env.MAIL_SECRET) {
+    console.error('OF-308', 'MAIL_URL eller MAIL_SECRET mangler');
+    return 'OF-308';
+  }
+  try {
+    const r = await fetch(env.MAIL_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hemmelighed: env.MAIL_SECRET, emne, tekst, svarTil }),
+      redirect: 'follow', // Apps Script svarer via en omdirigering
+    });
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d || !d.ok) throw new Error(`Apps Script ${r.status}: ${(d && d.fejl) || 'uventet svar'}`);
+    return null;
+  } catch (e) {
+    console.error('OF-309', e.message);
+    return 'OF-309';
+  }
 }
