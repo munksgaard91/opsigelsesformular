@@ -130,17 +130,22 @@ body.har-video .bg-slor{display:block}
 
 /* Kvittering */
 .kvit{text-align:center}
-.fakta{text-align:left;max-width:460px;margin:0 auto 24px;padding:0;list-style:none;font-size:14px}
-.fakta li{padding:9px 0;border-bottom:1px solid var(--linje)}
-.fakta a{color:var(--blaa);font-weight:600}
-.kvit .knapper{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:0 0 20px}
+/* Infokort i kvitteringen */
+.infokort{text-align:left;max-width:480px;margin:0 auto 20px;border:1px solid var(--linje);border-radius:12px;background:#f7f9fb;overflow:hidden;font-size:14px}
+.infokort-top{padding:14px 18px;background:#fff;border-bottom:1px solid var(--linje)}
+.infokort-top b{display:block;font-size:15px}
+.infokort-top .sub{font-size:13px;color:var(--daemp)}
+.infokort-linje{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--linje)}
+.infokort-linje:last-child{border-bottom:0}
+.infokort-linje > span:last-child,.infokort-linje > b{text-align:right}
+.kvit .knapper{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:32px 0 20px}
 .kvit .knapper:empty{display:none}
 .kvit .knapper a{font:inherit;font-size:14px;font-weight:600;padding:9px 16px;border-radius:999px;border:1px solid var(--blaa);background:#fff;color:var(--blaa);text-decoration:none}
 .kvit .knapper a:hover{background:var(--blaa);color:#fff}
-.kvit .obs{color:var(--advar);font-size:14px;max-width:460px;margin:0 auto 16px}
+.kvit .obs{color:var(--advar);font-size:14px;max-width:480px;margin:0 auto 10px}
 .ny-sag{display:inline-block;font-size:14px;color:var(--daemp)}
 .ny-sag:hover{color:var(--blaa)}
-@media (prefers-reduced-motion:no-preference){.kvit .fakta{animation:ind .35s ease-out}}
+@media (prefers-reduced-motion:no-preference){.kvit .infokort{animation:ind .35s ease-out}}
 @media (prefers-reduced-motion:no-preference){#resten:not(.skjult){animation:fold .25s ease-out}}
 @keyframes fold{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
 @keyframes ind{from{transform:scale(.97);opacity:0}to{transform:none;opacity:1}}

@@ -116,7 +116,7 @@ async function vaelgKunde(k) {
   const el = $('#kundeValgt');
   el.classList.remove('skjult');
   el.innerHTML = `<div class="kunde"><span><b>${esc(k.navn)}</b><span class="sub">${esc(k.domaene || 'Ingen hjemmeside på kundekortet')}</span><span class="sub saelger" id="saelger">Sælger: henter…</span></span>
-    <span class="handl">${k.url ? `<a class="link" href="${esc(k.url)}" target="_blank" rel="noopener">Åbn i ClickUp ${IKON_UD}</a>` : ''}<button class="link" type="button" id="skiftKunde">Vælg ny kunde</button></span></div>
+    <span class="handl">${k.url ? `<a class="link" href="${esc(k.url)}" target="_blank" rel="noopener">Åbn i BestCRM ${IKON_UD}</a>` : ''}<button class="link" type="button" id="skiftKunde">Vælg ny kunde</button></span></div>
     ${LUKKET.test(k.status) ? `<p class="advarsel">Kunden har allerede status "${esc(k.status)}". Tjek at opsigelsen ikke er lavet før.</p>` : ''}`;
   $('#skiftKunde').onclick = nulstilKunde;
   $('#resten').classList.remove('skjult');
@@ -169,7 +169,7 @@ function tegnAftaler() {
   if (!a) { rod.innerHTML = `<p class="forhaand">Henter kundens aftaler…</p>`; opdaterAfhaengige(); return; }
   if (a.fejl) { rod.innerHTML = `<p class="forhaand advarsel-lys">Kunne ikke hente aftalerne. ${esc(a.fejl)}</p>`; opdaterAfhaengige(); return; }
   if (!a.length) {
-    rod.innerHTML = `<p class="forhaand advarsel-lys">Kunden har ingen Genfak-aftaler i ClickUp, så der er ikke noget at opsige her. Tjek kundekortet.</p>`;
+    rod.innerHTML = `<p class="forhaand advarsel-lys">Kunden har ingen Genfak-aftaler i BestCRM, så der er ikke noget at opsige her. Tjek kundekortet.</p>`;
     opdaterAfhaengige(); return;
   }
   // Én linje pr. aftale, tidligste udløb først. Man kan vælge flere.
@@ -190,7 +190,7 @@ function tegnAftaler() {
       <span class="produkter">${(x.produkter || []).map((p) => `<span class="produkt" data-farve="${gyldigFarve(p.farve)}">${esc(p.navn)}</span>`).join('') || `<b>${esc(x.navn)}</b>`}</span>
       ${x.opsagt ? '<span class="udloeb">🪦 Opsagt</span>' : `<span class="udloeb ${s.klasse}" title="${esc(s.titel)}">${x.udloeb ? esc(kortDato(x.udloeb)) : 'Ingen udløbsdato'}</span>`}
       <span class="vaerdi">${esc(kr(x.vaerdi) || '')}</span>
-      ${x.url ? `<a class="link" href="${esc(x.url)}" target="_blank" rel="noopener" aria-label="Åbn aftalen i ClickUp">${IKON_UD}</a>` : '<span class="link"></span>'}
+      ${x.url ? `<a class="link" href="${esc(x.url)}" target="_blank" rel="noopener" aria-label="Åbn aftalen i BestCRM">${IKON_UD}</a>` : '<span class="link"></span>'}
     </label>`;
   }).join('')}</div>`;
   rod.querySelectorAll('.produkt').forEach((el) => { el.style.background = el.dataset.farve; el.style.color = tekstfarve(el.dataset.farve); });
@@ -311,31 +311,34 @@ $('#opsig').addEventListener('click', async () => {
   }
 });
 
+// Kvitteringen viser opsigelsen som et kort. Kun fejl vises som tekst; det der lykkedes, siges ikke.
 function visKvittering(d, data) {
   const k = $('#kvittering');
+  const chips = (a) => (a.produkter || []).map((p) => `<span class="produkt" data-farve="${gyldigFarve(p.farve)}">${esc(p.navn)}</span>`).join('') || `<b>${esc(a.navn)}</b>`;
+  const stopper = (a) => (data.stop === 'nu' ? 'Stopper nu' : a.udloeb ? `Stopper ved udløb ${esc(dato(a.udloeb))}` : 'Stopper ved udløb (ingen dato i BestCRM)');
+  const fejl = [
+    (d.tagFejl || []).length ? `Disse aftaler fik ikke 🪦 og skal markeres i hånden: ${d.tagFejl.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.navn)}</a>`).join(', ')}. (Fejlkode: OF-306)` : '',
+    d.mailFejl ? `Mailen til bogholderiet kunne ikke sendes. Giv dem besked selv. (Fejlkode: ${esc(d.mailFejl)})` : '',
+    d.adminFejl ? `Hjemmeside Admin kunne ikke sættes på kunden. Gør det i hånden. (Fejlkode: ${esc(d.adminFejl)})` : '',
+    d.dueFejl ? `Due date på kunden kunne ikke tjekkes. Tjek den i hånden. (Fejlkode: ${esc(d.dueFejl)})` : '',
+    d.kommentarFejl ? `Kommentaren på kunden kunne ikke skrives. (Fejlkode: ${esc(d.kommentarFejl)})` : '',
+    d.demo ? 'Demo: intet er sendt til BestCRM.' : '',
+  ].filter(Boolean);
   k.innerHTML = `
     ${$('.logo').outerHTML}
     <h1>Opsigelsen er registreret</h1>
-    <ul class="fakta">
-      <li><b>Kunde:</b> ${esc(S.kunde.navn)}</li>
-      ${S.valgte.map((a) => `<li><b>${esc(aftaleNavn(a))}:</b> stopper ${data.stop === 'nu' ? 'nu' : a.udloeb ? `ved udløb ${esc(dato(a.udloeb))}` : 'ved udløb (ingen dato i ClickUp)'}</li>`).join('')}
-      ${data.tilsendHjemmeside === null ? '' : `<li><b>Tilsend hjemmesiden:</b> ${data.tilsendHjemmeside ? 'Ja' : 'Nej'}</li>`}
-    </ul>
-    ${!d.demo && Array.isArray(d.tagFejl) ? `<p class="forhaand">${d.antal === 1 ? 'Aftalen er' : 'Aftalerne er'} markeret med 🪦 i ClickUp${'mailFejl' in d && !d.mailFejl ? ', bogholderiet har fået en mail,' : ''} og der er skrevet en kommentar på kunden.</p>` : ''}
-    ${d.mailFejl ? `<p class="obs">Mailen til bogholderiet kunne ikke sendes. Giv dem besked selv. (Fejlkode: ${esc(d.mailFejl)})</p>` : ''}
-    ${d.adminTilfoejet ? `<p class="forhaand">Hjemmeside Admin er sat på kunden, fordi opsigelsen kun gælder hjemmesiden.</p>` : ''}
-    ${d.adminFejl ? `<p class="obs">Hjemmeside Admin kunne ikke sættes på kunden. Gør det i hånden. (Fejlkode: ${esc(d.adminFejl)})</p>` : ''}
-    ${d.dueSat ? `<p class="forhaand">Kunden havde ingen due date, så den er sat til ${esc(dato(d.dueSat))}.</p>` : ''}
-    ${d.dueFejl ? `<p class="obs">Due date på kunden kunne ikke tjekkes. Tjek den i hånden. (Fejlkode: ${esc(d.dueFejl)})</p>` : ''}
-    ${!d.demo && !Array.isArray(d.tagFejl) ? `<p class="forhaand">Opsigelsen er skrevet som en kommentar på kunden.</p>` : ''}
-    ${(d.tagFejl || []).length ? `<p class="obs">Disse aftaler fik ikke 🪦 og skal markeres i hånden: ${d.tagFejl.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.navn)}</a>`).join(', ')}. (Fejlkode: OF-306)</p>` : ''}
-    ${d.kommentarFejl ? `<p class="obs">Kommentaren på kunden kunne ikke skrives, men aftalerne er markeret. (Fejlkode: ${esc(d.kommentarFejl)})</p>` : ''}
-    <div class="knapper">
-      ${S.kunde.url ? `<a href="${esc(S.kunde.url)}" target="_blank" rel="noopener">Åbn kunden i ClickUp<span class="sr"> (åbner i ny fane)</span></a>` : ''}
-      ${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">Åbn opsigelsen i ClickUp<span class="sr"> (åbner i ny fane)</span></a>` : ''}
+    <div class="infokort">
+      <div class="infokort-top"><b>${esc(S.kunde.navn)}</b>${S.kunde.domaene ? `<span class="sub">${esc(S.kunde.domaene)}</span>` : ''}</div>
+      ${S.valgte.map((a) => `<div class="infokort-linje"><span class="produkter">${chips(a)}</span><span>${stopper(a)}</span></div>`).join('')}
+      ${data.tilsendHjemmeside === null ? '' : `<div class="infokort-linje"><span>Skal hjemmesiden udleveres?</span><b>${data.tilsendHjemmeside ? 'Ja' : 'Nej'}</b></div>`}
     </div>
-    ${d.demo ? `<p class="obs">Demo: intet er sendt til ClickUp.</p>` : ''}
+    ${fejl.map((f) => `<p class="obs">${f}</p>`).join('')}
+    <div class="knapper">
+      ${S.kunde.url ? `<a href="${esc(S.kunde.url)}" target="_blank" rel="noopener">Åbn kunden i BestCRM<span class="sr"> (åbner i ny fane)</span></a>` : ''}
+      ${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">Åbn opsigelsen i BestCRM<span class="sr"> (åbner i ny fane)</span></a>` : ''}
+    </div>
     <button class="link ny-sag" type="button" id="nyOpsigelse">Opret en ny opsigelse</button>`;
+  k.querySelectorAll('.produkt').forEach((el) => { el.style.background = el.dataset.farve; el.style.color = tekstfarve(el.dataset.farve); });
   $('#formular').classList.add('skjult'); k.classList.remove('skjult');
   $('#nyOpsigelse').onclick = nulstilAlt;
   window.scrollTo(0, 0);
