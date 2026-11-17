@@ -311,7 +311,8 @@ function visKvittering(d, data) {
       ${S.valgte.map((a) => `<li><b>${esc(aftaleNavn(a))}:</b> stopper ${data.stop === 'nu' ? 'nu' : a.udloeb ? `ved udløb ${esc(dato(a.udloeb))}` : 'ved udløb (ingen dato i ClickUp)'}</li>`).join('')}
       ${data.tilsendHjemmeside === null ? '' : `<li><b>Tilsend hjemmesiden:</b> ${data.tilsendHjemmeside ? 'Ja' : 'Nej'}</li>`}
     </ul>
-    ${!d.demo ? `<p class="forhaand">${d.antal === 1 ? 'Aftalen er' : 'Aftalerne er'} markeret med 🪦 i ClickUp, og der er skrevet en kommentar på kunden.</p>` : ''}
+    ${!d.demo && Array.isArray(d.tagFejl) ? `<p class="forhaand">${d.antal === 1 ? 'Aftalen er' : 'Aftalerne er'} markeret med 🪦 i ClickUp, og der er skrevet en kommentar på kunden.</p>` : ''}
+    ${!d.demo && !Array.isArray(d.tagFejl) ? `<p class="forhaand">Opsigelsen er skrevet som en kommentar på kunden.</p>` : ''}
     ${(d.tagFejl || []).length ? `<p class="obs">Disse aftaler fik ikke 🪦 og skal markeres i hånden: ${d.tagFejl.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.navn)}</a>`).join(', ')}. (Fejlkode: OF-306)</p>` : ''}
     ${d.kommentarFejl ? `<p class="obs">Kommentaren på kunden kunne ikke skrives, men aftalerne er markeret. (Fejlkode: ${esc(d.kommentarFejl)})</p>` : ''}
     <div class="knapper">
