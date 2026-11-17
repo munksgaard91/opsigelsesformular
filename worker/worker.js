@@ -2,7 +2,7 @@
 // Formularen ligger på GitHub Pages. Denne worker:
 //   1. tjekker Google-login (kun @best-one.dk) og udsteder en session på 30 dage
 //   2. henter kunder (fra supportformularens KV) og kundens Genfak-aftaler fra ClickUp
-//   3. registrerer opsigelsen (indtil videre kun som kommentar på kundeopgaven)
+//   3. registrerer opsigelsen: 🪦 på aftalerne, mail til bogholderiet, kommentar, evt. Hjemmeside Admin og due date
 //
 // Secrets i Cloudflare: CLICKUP_TOKEN, SESSION_SECRET, MAIL_URL (Apps Script-webappens adresse), MAIL_SECRET
 // KV-binding: KUNDER_KV = SAMME navnerum som supportformularen. Supportens cron
@@ -38,7 +38,7 @@ export default {
       if (req.method === 'OPTIONS') return svar(null, 204);
 
       if (url.pathname === '/api/login' && req.method === 'POST') {
-        const { credential } = await req.json().catch(() => ({}));
+        const { credential } = (await req.json().catch(() => null)) || {};
         return svar(await login(env, credential), 200);
       }
 
@@ -53,7 +53,7 @@ export default {
         return svar(await medKode('OF-202', 'Aftalerne kunne ikke hentes.', () => aftaler(env, url.searchParams.get('kunde'))), 200);
       }
       if (url.pathname === '/api/opsig' && req.method === 'POST') {
-        return svar(await opsig(env, bruger, await req.json().catch(() => ({}))), 200);
+        return svar(await opsig(env, bruger, (await req.json().catch(() => null)) || {}), 200);
       }
       return svar({ fejl: 'Siden findes ikke', kode: 'OF-901' }, 404);
     } catch (e) {
@@ -92,7 +92,9 @@ let JWKS = { t: 0, keys: [] };
 async function googleNoegler(tving) {
   if (!tving && Date.now() - JWKS.t < 3600000 && JWKS.keys.length) return JWKS.keys;
   const r = await fetch('https://www.googleapis.com/oauth2/v3/certs');
-  JWKS = { t: Date.now(), keys: (await r.json()).keys };
+  const d = r.ok ? await r.json().catch(() => null) : null;
+  if (!d || !Array.isArray(d.keys)) throw fejl('Google-login svarer ikke lige nu. Prøv igen om lidt.', 503, 'OF-108', `JWKS ${r.status}`);
+  JWKS = { t: Date.now(), keys: d.keys }; // gamle nøgler beholdes, hvis hentningen fejler
   return JWKS.keys;
 }
 
@@ -100,6 +102,7 @@ async function googleNoegler(tving) {
 async function login(env, credential) {
   if (!credential) throw fejl('Mangler login fra Google.', 400, 'OF-101');
   const [h, p, sig] = String(credential).split('.');
+  if (!h || !p || !sig) throw fejl('Ugyldigt login.', 401, 'OF-102', 'Login fra Google har forkert format');
   let header, data;
   try { header = JSON.parse(b64url.tekst(h)); data = JSON.parse(b64url.tekst(p)); }
   catch { throw fejl('Ugyldigt login.', 401, 'OF-102', 'Kunne ikke læse login fra Google'); }
@@ -113,11 +116,12 @@ async function login(env, credential) {
   const nu = Math.floor(Date.now() / 1000);
   if (!ok) throw fejl('Ugyldigt login.', 401, 'OF-102', 'Signatur passer ikke');
   if (!['accounts.google.com', 'https://accounts.google.com'].includes(data.iss)) throw fejl('Ugyldigt login.', 401, 'OF-102', 'Forkert udsteder');
-  if (data.aud !== CFG.GOOGLE_CLIENT_ID) throw fejl('Login er ikke sat rigtigt op.', 500, 'OF-107', `Client ID passer ikke: ${data.aud}`);
+  if (data.aud !== CFG.GOOGLE_CLIENT_ID) throw fejl('Ugyldigt login.', 401, 'OF-107', `Client ID passer ikke: ${data.aud}`);
   if (data.exp < nu) throw fejl('Login er udløbet. Prøv igen.', 401, 'OF-104');
   if (data.hd !== CFG.DOMAENE || !data.email_verified) throw fejl(`Log ind med din @${CFG.DOMAENE}-konto.`, 403, 'OF-103', data.email);
 
-  const session = { email: data.email, navn: data.name || data.email, exp: nu + CFG.SESSION_DAGE * 86400 };
+  // formaal binder sessionen til denne formular, så et token fra en anden formular aldrig gælder her
+  const session = { formaal: 'opsigelse', email: data.email, navn: data.name || data.email, exp: nu + CFG.SESSION_DAGE * 86400 };
   return { token: await signer(env, session), ...session, billede: data.picture || null };
 }
 
@@ -140,7 +144,7 @@ async function tjekSession(env, req) {
     const ok = await crypto.subtle.verify('HMAC', noegle, b64url.fra(m[2]), new TextEncoder().encode(m[1]));
     if (!ok) return null;
     const data = JSON.parse(b64url.tekst(m[1]));
-    return data.exp > Date.now() / 1000 ? data : null;
+    return data.formaal === 'opsigelse' && data.exp > Date.now() / 1000 ? data : null;
   } catch {
     return null;
   }
@@ -297,8 +301,11 @@ async function genfakOpgaver(env, kundeId) {
   if (!/^[a-z0-9]+$/i.test(String(kundeId || ''))) throw fejl('Ukendt kunde.', 400, 'OF-400');
   try {
     const d = await cu(env, `/list/${CFG.KUNDER_LIST}/task?parent=${kundeId}&subtasks=true&include_closed=true&archived=false`);
-    const opgaver = (d.tasks || []).filter((t) => erGenfak(t, kundeId));
-    if (opgaver.length) return { kunde: { id: kundeId }, opgaver };
+    const tasks = d.tasks || [];
+    // Kun hvis ClickUp faktisk har filtreret på kunden og svaret ikke er afkortet (100 pr. side)
+    const filtreret = tasks.length > 0 && tasks.length < 100 && tasks.every((t) => t.parent === kundeId);
+    const opgaver = tasks.filter((t) => erGenfak(t, kundeId));
+    if (filtreret && opgaver.length) return { kunde: { id: kundeId }, opgaver };
   } catch (e) {
     console.error('Hurtig hentning af aftaler fejlede', e.detalje || e.message);
   }
@@ -308,6 +315,7 @@ async function genfakOpgaver(env, kundeId) {
 // Langsom vej: kundeopgaven med underopgaver, og derefter hver Genfak for sig
 async function genfakOpgaverLangsomt(env, kundeId) {
   const kunde = await cu(env, `/task/${kundeId}?include_subtasks=true`);
+  if (!kunde.list || String(kunde.list.id) !== CFG.KUNDER_LIST) throw fejl('Opgaven er ikke en kunde i Kunder-listen.', 400, 'OF-400', `Liste ${kunde.list && kunde.list.id}`);
   const ids = (kunde.subtasks || [])
     // Mangler typen i oversigten, hentes opgaven alligevel og filtreres nedenfor
     .filter((s) => (s.custom_item_id === undefined || s.custom_item_id === CFG.GENFAK_TYPE_ID) && !(s.status && s.status.type === 'closed'))
@@ -430,6 +438,9 @@ async function opsig(env, bruger, b) {
   if (aftaler.some((o) => !o)) throw fejl('En af aftalerne hører ikke til kunden. Genindlæs siden og prøv igen.', 400, 'OF-401');
   const valgte = aftaler.map((o) => tilAftale(o, reserve)).sort((x, y) => (x.udloeb || Infinity) - (y.udloeb || Infinity));
   if (valgte.some((a) => a.opsagt)) throw fejl('En af aftalerne er allerede opsagt (🪦). Genindlæs siden.', 400, 'OF-402');
+  // Kunne produkterne ikke slås op, ville HOS-reglerne og hjemmeside-spørgsmålet blive sprunget over i stilhed
+  const ukendte = aftaler.filter((o, i) => !valgte.find((a) => a.id === o.id).produkter.length && (felt(o, CFG.F.produkter) || []).length);
+  if (ukendte.length) throw fejl('Produkterne på en aftale kunne ikke læses fra BestCRM. Intet er ændret. Prøv igen om lidt.', 502, 'OF-312', ukendte.map((o) => o.id).join(','));
   const hosting = valgte.some((a) => a.produkter.some((p) => erHosting(p.navn)));
   if (hosting && typeof b.tilsendHjemmeside !== 'boolean') throw fejl('Vælg om kunden skal have tilsendt hjemmesiden.', 400, 'OF-400');
 
@@ -479,7 +490,10 @@ async function opsig(env, bruger, b) {
   }
 
   // 2. Mail til bogholderiet, efter ledelsens skabelon
-  const info = await kundeInfo(env, kunde.id);
+  const info = await kundeInfo(env, kunde.id).catch((e) => {
+    console.error('Kundeinfo kunne ikke hentes', kunde.id, e.detalje || e.message);
+    return { navn: kunde.name || `Kunde ${kunde.id}`, url: `${CFG.CLICKUP_URL}/t/${kunde.id}` };
+  });
   const emne = `${info.navn}: Opsagte produkter: ${valgte.map(navn).join(', ')}`;
   const mailTekst = [
     `${info.navn} har opsagt følgende produkter`,

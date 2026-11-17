@@ -1,18 +1,24 @@
 // Konfiguration
 const API = 'https://opsigelsesformular.best-one.workers.dev'; // workerens adresse
 const GOOGLE_CLIENT_ID = '733090718962-9dda64antqa8ki7j5q3de1nfrv7rod35.apps.googleusercontent.com'; // offentligt ID, ikke en hemmelighed
-// Demo: kører med testdata og uden login, når siden åbnes lokalt eller med ?demo i adressen
-const DEMO = location.protocol === 'file:' || /^(localhost|127\.0\.0\.1)$/.test(location.hostname) || new URLSearchParams(location.search).has('demo');
+// Demo: kører med testdata og uden login, kun når siden åbnes lokalt (aldrig på den rigtige adresse)
+const DEMO = location.protocol === 'file:' || /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const norm = (s) => String(s || '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').trim();
-const dato = (ms) => (ms ? new Date(+ms).toLocaleDateString('da-DK', { day: 'numeric', month: 'long', year: 'numeric' }) : null);
-const kortDato = (ms) => new Date(+ms).toLocaleDateString('da-DK', { day: 'numeric', month: 'short', year: 'numeric' });
+// Datoer vises altid i dansk tid, uanset hvor browseren står
+const TZ = 'Europe/Copenhagen';
+const dato = (ms) => (ms ? new Date(+ms).toLocaleDateString('da-DK', { day: 'numeric', month: 'long', year: 'numeric', timeZone: TZ }) : null);
+const kortDato = (ms) => new Date(+ms).toLocaleDateString('da-DK', { day: 'numeric', month: 'short', year: 'numeric', timeZone: TZ });
 // Sæsonen løber juli-juni. Sæson 2026 = 1. juli 2026 til 30. juni 2027.
-const saeson = (ms) => { const d = new Date(+ms); return d.getMonth() >= 6 ? d.getFullYear() : d.getFullYear() - 1; };
+const saeson = (ms) => {
+  const [aar, mdr] = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', timeZone: TZ }).format(new Date(+ms)).split('-').map(Number);
+  return mdr >= 7 ? aar : aar - 1;
+};
 function saesonKlasse(udloeb) {
   if (!udloeb) return { klasse: '', titel: '' };
+  if (+udloeb < Date.now()) return { klasse: 'denne', titel: 'Udløbet' };
   const nu = saeson(Date.now()), forskel = saeson(udloeb) - nu;
   const navn = (s) => `${s}/${String(s + 1).slice(2)}`;
   if (forskel <= 0) return { klasse: 'denne', titel: `Udløber i indeværende sæson (${navn(nu)})` };
@@ -292,6 +298,9 @@ $('#opsig').addEventListener('click', async () => {
   if (tjek) { fejl.textContent = tjek[1]; return; }
 
   const knap = $('#opsig'); knap.disabled = true; knap.textContent = 'Opsiger…';
+  // Formularen låses, mens der opsiges, og kvitteringen bygges af det, der blev sendt
+  const form = $('#formular'); form.inert = true;
+  const sendt = { kunde: S.kunde, valgte: [...S.valgte] };
   const data = {
     kundeId: S.kunde.id,
     aftaleIder: S.valgte.map((a) => a.id),
@@ -302,18 +311,26 @@ $('#opsig').addEventListener('click', async () => {
   try {
     const d = await api('/api/opsig', { method: 'POST', body: JSON.stringify(data) });
     AFTALE_CACHE.delete(data.kundeId); // kundens aftaler kan have ændret sig
-    visKvittering(d, data);
+    visKvittering(d, data, sendt);
   } catch (e) {
     const brugerfejl = ['OF-400', 'OF-401', 'OF-402'].includes(e.kode);
     fejl.textContent = visFejl(e) + (brugerfejl ? '' : ' Prøv igen, eller giv besked med fejlkoden, hvis det fortsætter.');
+    // Aftalerne har ændret sig siden de blev hentet: hent dem på ny i stedet for at bede om genindlæsning
+    if (['OF-401', 'OF-402'].includes(e.kode) && S.kunde && S.kunde.id === data.kundeId) {
+      AFTALE_CACHE.delete(data.kundeId);
+      const fejlTekst = fejl.textContent;
+      vaelgKunde(S.kunde).then(() => { fejl.textContent = fejlTekst.replace(' Genindlæs siden.', '').replace(' Genindlæs siden og prøv igen.', '') + ' Aftalerne er hentet igen.'; });
+    }
   } finally {
+    form.inert = false;
     knap.disabled = false; knap.textContent = 'Opsig';
   }
 });
 
 // Kvitteringen viser opsigelsen som et kort. Kun fejl vises som tekst; det der lykkedes, siges ikke.
-function visKvittering(d, data) {
+function visKvittering(d, data, sendt) {
   const k = $('#kvittering');
+  const kunde = sendt.kunde, valgte = sendt.valgte;
   const chips = (a) => (a.produkter || []).map((p) => `<span class="produkt" data-farve="${gyldigFarve(p.farve)}">${esc(p.navn)}</span>`).join('') || `<b>${esc(a.navn)}</b>`;
   const stopper = (a) => (data.stop === 'nu' ? 'Stopper nu' : a.udloeb ? `Stopper ved udløb ${esc(dato(a.udloeb))}` : 'Stopper ved udløb (ingen dato i BestCRM)');
   const fejl = [
@@ -328,13 +345,13 @@ function visKvittering(d, data) {
     ${$('.logo').outerHTML}
     <h1>Opsigelsen er registreret</h1>
     <div class="infokort">
-      <div class="infokort-top"><b>${esc(S.kunde.navn)}</b>${S.kunde.domaene ? `<span class="sub">${esc(S.kunde.domaene)}</span>` : ''}</div>
-      ${S.valgte.map((a) => `<div class="infokort-linje"><span class="produkter">${chips(a)}</span><span>${stopper(a)}</span></div>`).join('')}
+      <div class="infokort-top"><b>${esc(kunde.navn)}</b>${kunde.domaene ? `<span class="sub">${esc(kunde.domaene)}</span>` : ''}</div>
+      ${valgte.map((a) => `<div class="infokort-linje"><span class="produkter">${chips(a)}</span><span>${stopper(a)}</span></div>`).join('')}
       ${data.tilsendHjemmeside === null ? '' : `<div class="infokort-linje"><span>Skal hjemmesiden udleveres?</span><b>${data.tilsendHjemmeside ? 'Ja' : 'Nej'}</b></div>`}
     </div>
     ${fejl.map((f) => `<p class="obs">${f}</p>`).join('')}
     <div class="knapper">
-      ${S.kunde.url ? `<a href="${esc(S.kunde.url)}" target="_blank" rel="noopener">Åbn kunden i BestCRM<span class="sr"> (åbner i ny fane)</span></a>` : ''}
+      ${kunde.url ? `<a href="${esc(kunde.url)}" target="_blank" rel="noopener">Åbn kunden i BestCRM<span class="sr"> (åbner i ny fane)</span></a>` : ''}
       ${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">Åbn opsigelsen i BestCRM<span class="sr"> (åbner i ny fane)</span></a>` : ''}
     </div>
     <button class="link ny-sag" type="button" id="nyOpsigelse">Opret en ny opsigelse</button>`;
