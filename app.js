@@ -23,11 +23,11 @@ const kr = (v) => (v || v === 0 ? new Intl.NumberFormat('da-DK', { maximumFracti
 
 let KUNDER = [];
 // aftaler: kundens Genfak-opgaver. aftale: den valgte (én kontrakt = én opsigelse).
-const S = { kunde: null, aftaler: null, aftale: null, varighed: null, stop: null, overdragelse: null };
+const S = { kunde: null, aftaler: null, aftale: null, stop: null, overdragelse: null };
 
 // ---------- Generisk søgeliste ----------
-function combo({ input, liste, hent, render, vaelg, tom }) {
-  let fund = [], aktiv = 0;
+function combo({ input, liste, hent, render, vaelg, tom, paaMarker }) {
+  let fund = [], aktiv = 0, hoverTimer = null;
   function tegn() {
     fund = hent(input.value);
     aktiv = 0;
@@ -36,12 +36,14 @@ function combo({ input, liste, hent, render, vaelg, tom }) {
       : `<div class="tom">${tom ? tom(input.value) : 'Ingen resultater'}</div>`;
     liste.classList.add('aaben');
     input.setAttribute('aria-expanded', 'true');
+    if (paaMarker && fund.length === 1) paaMarker(fund[0]); // kun ét match: hent i forvejen
   }
   function luk() { liste.classList.remove('aaben'); input.setAttribute('aria-expanded', 'false'); }
   function marker(i) {
     aktiv = Math.max(0, Math.min(fund.length - 1, i));
     liste.querySelectorAll('.valg').forEach((el, j) => el.setAttribute('aria-selected', j === aktiv));
     liste.querySelector(`[data-i="${aktiv}"]`)?.scrollIntoView({ block: 'nearest' });
+    if (paaMarker && fund[aktiv]) paaMarker(fund[aktiv]);
   }
   input.addEventListener('input', tegn);
   input.addEventListener('focus', tegn);
@@ -50,6 +52,12 @@ function combo({ input, liste, hent, render, vaelg, tom }) {
     else if (e.key === 'ArrowUp') { e.preventDefault(); marker(aktiv - 1); }
     else if (e.key === 'Enter' && fund[aktiv]) { e.preventDefault(); vaelg(fund[aktiv]); input.value = ''; luk(); }
     else if (e.key === 'Escape') luk();
+  });
+  // Musen over en kunde: hent i forvejen, når den har hvilet et øjeblik
+  liste.addEventListener('mouseover', (e) => {
+    const el = e.target.closest('.valg');
+    clearTimeout(hoverTimer);
+    if (el && paaMarker) hoverTimer = setTimeout(() => fund[+el.dataset.i] && paaMarker(fund[+el.dataset.i]), 150);
   });
   liste.addEventListener('mousedown', (e) => {
     e.preventDefault(); // behold fokus, så knapper i listen kan klikkes
@@ -81,6 +89,7 @@ const kundeCombo = combo({
   hent: soegKunder,
   render: (k) => `<span><b>${esc(k.navn)}</b><br><span class="sub">${esc(k.domaene || 'Ingen hjemmeside på kundekortet')}</span></span>${LUKKET.test(k.status) ? `<span class="pille">${esc(k.status)}</span>` : ''}`,
   vaelg: vaelgKunde,
+  paaMarker: (k) => hentAftaler(k.id),
   tom: () => `Ingen kunder matcher. <button type="button" data-handl="opdater">Opdatér listen</button>`,
 });
 $('#kundeListe').addEventListener('click', (e) => {
@@ -88,6 +97,18 @@ $('#kundeListe').addEventListener('click', (e) => {
 });
 
 const IKON_UD = `<svg class="ikon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M9 2h5v5M14 2L7 9M12 9v4a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="sr">(åbner i ny fane)</span>`;
+
+// Aftaler hentes i forvejen, når en kunde markeres i søgelisten, og huskes i 5 minutter.
+// Samme kunde hentes aldrig to gange samtidig.
+const AFTALE_CACHE = new Map();
+function hentAftaler(id, frisk) {
+  const hit = AFTALE_CACHE.get(id);
+  if (!frisk && hit && Date.now() - hit.t < 5 * 60000) return hit.p;
+  const p = api('/api/aftaler?kunde=' + encodeURIComponent(id));
+  AFTALE_CACHE.set(id, { t: Date.now(), p });
+  p.catch(() => AFTALE_CACHE.delete(id)); // en fejl skal ikke huskes
+  return p;
+}
 
 async function vaelgKunde(k) {
   S.kunde = k; S.aftaler = null; S.aftale = null;
@@ -101,7 +122,7 @@ async function vaelgKunde(k) {
   $('#resten').classList.remove('skjult');
   tegnAftaler();
   try {
-    const aftaler = await api('/api/aftaler?kunde=' + encodeURIComponent(k.id));
+    const aftaler = await hentAftaler(k.id);
     if (S.kunde !== k) return; // brugeren har skiftet kunde imens
     S.aftaler = aftaler;
   } catch (e) {
@@ -113,8 +134,8 @@ async function vaelgKunde(k) {
 function nulstilKunde() {
   S.kunde = null; S.aftaler = null; S.aftale = null;
   // Svarene hører til den forrige kunde, så de nulstilles
-  ['#varighed', '#stop', '#overdragelse'].forEach((s) => document.querySelectorAll(`${s} button`).forEach((b) => b.setAttribute('aria-pressed', 'false')));
-  S.varighed = S.stop = S.overdragelse = null;
+  ['#stop', '#overdragelse'].forEach((s) => document.querySelectorAll(`${s} button`).forEach((b) => b.setAttribute('aria-pressed', 'false')));
+  S.stop = S.overdragelse = null;
   $('#kundeValgt').classList.add('skjult');
   $('#kundeSoeg').classList.remove('skjult');
   $('#resten').classList.add('skjult');
@@ -195,7 +216,6 @@ function segment(rod, onChange) {
     onChange(b.dataset.v);
   });
 }
-segment($('#varighed'), (v) => (S.varighed = v));
 segment($('#stop'), (v) => { S.stop = v; opdaterStopTekst(); });
 segment($('#overdragelse'), (v) => (S.overdragelse = v));
 
@@ -225,14 +245,12 @@ async function hentKunder(frisk) {
 function start() { hentKunder(false); }
 
 // ---------- Opsig ----------
-const VARIGHED = { 1: '1 år', 2: '2 år', 3: '3 år', 4: '4 år', 5: '5 år' };
 
 $('#opsig').addEventListener('click', async () => {
   const fejl = $('#fejl'); fejl.textContent = '';
   const tjek = [
     [!S.kunde, 'Vælg kunden.'],
     [!S.aftale, 'Vælg hvilken aftale der opsiges.'],
-    [!S.varighed, 'Vælg aftalens samlede varighed.'],
     [!S.stop, 'Vælg hvornår kunden stopper.'],
     [opsigerHosting() && !S.overdragelse, 'Vælg om kunden skal have tilsendt hjemmesiden.'],
   ].find(([b]) => b);
@@ -242,13 +260,13 @@ $('#opsig').addEventListener('click', async () => {
   const data = {
     kundeId: S.kunde.id,
     aftaleId: S.aftale.id,
-    varighed: +S.varighed,
     stop: S.stop, // 'nu' eller 'udloeb'
     // null = hosting opsiges ikke, så spørgsmålet er ikke stillet
     tilsendHjemmeside: opsigerHosting() ? S.overdragelse === 'ja' : null,
   };
   try {
     const d = await api('/api/opsig', { method: 'POST', body: JSON.stringify(data) });
+    AFTALE_CACHE.delete(data.kundeId); // kundens aftaler kan have ændret sig
     visKvittering(d, data);
   } catch (e) {
     const brugerfejl = ['OF-400', 'OF-401'].includes(e.kode);
@@ -268,7 +286,6 @@ function visKvittering(d, data) {
     <ul class="fakta">
       <li><b>Kunde:</b> ${esc(S.kunde.navn)}</li>
       <li><b>Aftale:</b> ${esc((a.produkter || []).map((p) => p.navn).join(', ') || a.navn)}</li>
-      <li><b>Aftalens varighed:</b> ${VARIGHED[data.varighed]}</li>
       <li><b>Stopper:</b> ${data.stop === 'nu' ? 'Nu' : `Ved udløb af aftalen${udloeb ? ` (${udloeb})` : ''}`}</li>
       ${data.tilsendHjemmeside === null ? '' : `<li><b>Tilsend hjemmesiden:</b> ${data.tilsendHjemmeside ? 'Ja' : 'Nej'}</li>`}
     </ul>

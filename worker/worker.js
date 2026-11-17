@@ -284,8 +284,24 @@ function tilAftale(t, reserve) {
   };
 }
 
+const erGenfak = (t, kundeId) => t.parent === kundeId && t.custom_item_id === CFG.GENFAK_TYPE_ID && !(t.status && t.status.type === 'closed');
+
+// Hurtig vej: alle kundens underopgaver med felter i ét kald til ClickUp.
+// Giver den ingen Genfak (fx hvis ClickUp ignorerer parent-filteret), bruges den langsomme vej.
 async function genfakOpgaver(env, kundeId) {
   if (!/^[a-z0-9]+$/i.test(String(kundeId || ''))) throw fejl('Ukendt kunde.', 400, 'OF-400');
+  try {
+    const d = await cu(env, `/list/${CFG.KUNDER_LIST}/task?parent=${kundeId}&subtasks=true&include_closed=true&archived=false`);
+    const opgaver = (d.tasks || []).filter((t) => erGenfak(t, kundeId));
+    if (opgaver.length) return { kunde: { id: kundeId }, opgaver };
+  } catch (e) {
+    console.error('Hurtig hentning af aftaler fejlede', e.detalje || e.message);
+  }
+  return genfakOpgaverLangsomt(env, kundeId);
+}
+
+// Langsom vej: kundeopgaven med underopgaver, og derefter hver Genfak for sig
+async function genfakOpgaverLangsomt(env, kundeId) {
   const kunde = await cu(env, `/task/${kundeId}?include_subtasks=true`);
   const ids = (kunde.subtasks || [])
     // Mangler typen i oversigten, hentes opgaven alligevel og filtreres nedenfor
@@ -293,7 +309,7 @@ async function genfakOpgaver(env, kundeId) {
     .map((s) => s.id);
   const opgaver = await Promise.all(ids.map((id) => cu(env, `/task/${id}`)));
   // Kun opgaver der stadig er Genfak og hører til kunden
-  return { kunde, opgaver: opgaver.filter((o) => o.parent === kunde.id && o.custom_item_id === CFG.GENFAK_TYPE_ID) };
+  return { kunde, opgaver: opgaver.filter((o) => erGenfak(o, kunde.id)) };
 }
 
 async function aftaler(env, kundeId) {
@@ -307,9 +323,7 @@ async function aftaler(env, kundeId) {
 const erHosting = (navn) => /^hos\+?$|hosting/i.test(String(navn).trim()); // HOS og HOS+, ikke H0S (nul)
 
 async function opsig(env, bruger, b) {
-  const varighed = Number(b.varighed);
   if (!b.kundeId || !b.aftaleId) throw fejl('Vælg kunden og aftalen.', 400, 'OF-400');
-  if (![1, 2, 3, 4, 5].includes(varighed)) throw fejl('Vælg aftalens samlede varighed.', 400, 'OF-400');
   if (!['nu', 'udloeb'].includes(b.stop)) throw fejl('Vælg hvornår kunden stopper.', 400, 'OF-400');
 
   // Aftalen skal høre til kunden
@@ -324,7 +338,6 @@ async function opsig(env, bruger, b) {
   const produktTekst = aftale.produkter.map((p) => p.navn).join(', ') || aftale.navn;
   const stopTekst = b.stop === 'nu' ? 'Nu' : `Ved udløb af aftalen${aftale.udloeb ? ` (${dato(aftale.udloeb)})` : ''}`;
   const detaljer = [
-    `Aftalens varighed: ${varighed} år`,
     `Stopper: ${stopTekst}`,
     ...(hosting ? [`Tilsend hjemmesiden: ${b.tilsendHjemmeside ? 'Ja' : 'Nej'}`] : []),
   ];

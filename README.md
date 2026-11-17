@@ -11,7 +11,7 @@ Ligger på https://opsigelse.leksione.dk og kræver login med en best-one.dk Goo
 
 1. Vælg kunden (søgning i Kunder-listen).
 2. Vælg én Genfak-aftale. Én aftale = én opsigelse.
-3. Aftalens samlede varighed, hvornår kunden stopper (nu / ved udløb) og, hvis aftalen indeholder HOS,
+3. Hvornår kunden stopper (nu / ved udløb) og, hvis aftalen indeholder HOS,
    om kunden skal have tilsendt hjemmesiden.
 4. "Opsig".
 
