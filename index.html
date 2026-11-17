@@ -82,6 +82,8 @@ input:focus,button:focus-visible{outline:2px solid var(--blaa);outline-offset:1p
 .aftale.valgt span:last-child{text-decoration:line-through;text-decoration-color:var(--roed)}
 .prik{width:10px;height:10px;border-radius:50%;flex:none}
 /* Aftalekort (Genfak-opgaver) */
+.vaelg-alle{display:block;margin:-4px 0 6px auto}
+#stopTekst{line-height:1.6}
 /* Én kompakt linje pr. aftale: valg | produkter | udløb | værdi | link */
 .aftaleliste{display:grid;gap:4px}
 .aftalekort{display:grid;grid-template-columns:18px 1fr auto 92px 16px;align-items:center;gap:12px;margin:0;padding:7px 12px;border:1px solid var(--linje);border-radius:8px;background:#fff;cursor:pointer;font-weight:400;font-size:13px}
@@ -172,8 +174,8 @@ body.har-video .bg-slor{display:block}
   <!-- Resten folder først ud, når kunden er valgt -->
   <div id="resten" class="skjult">
   <div class="felt">
-    <span class="lbl">Hvilken aftale opsiges? <span class="krav">*</span></span>
-    <span class="hj">Én aftale pr. opsigelse. Opsiger kunden flere aftaler, laver du en opsigelse for hver.</span>
+    <span class="lbl">Hvilke aftaler opsiges? <span class="krav">*</span></span>
+    <span class="hj">Vælg én eller flere af kundens aftaler.</span>
     <div id="aftaler"></div>
   </div>
 

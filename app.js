@@ -22,8 +22,8 @@ function saesonKlasse(udloeb) {
 const kr = (v) => (v || v === 0 ? new Intl.NumberFormat('da-DK', { maximumFractionDigits: 0 }).format(+v) + ' kr.' : null);
 
 let KUNDER = [];
-// aftaler: kundens Genfak-opgaver. aftale: den valgte (én kontrakt = én opsigelse).
-const S = { kunde: null, aftaler: null, aftale: null, stop: null, overdragelse: null };
+// aftaler: kundens Genfak-opgaver. valgte: de aftaler der opsiges (én eller flere).
+const S = { kunde: null, aftaler: null, valgte: [], stop: null, overdragelse: null };
 
 // ---------- Generisk søgeliste ----------
 function combo({ input, liste, hent, render, vaelg, tom, paaMarker }) {
@@ -111,7 +111,7 @@ function hentAftaler(id, frisk) {
 }
 
 async function vaelgKunde(k) {
-  S.kunde = k; S.aftaler = null; S.aftale = null;
+  S.kunde = k; S.aftaler = null; S.valgte = [];
   $('#kundeSoeg').classList.add('skjult');
   const el = $('#kundeValgt');
   el.classList.remove('skjult');
@@ -132,7 +132,7 @@ async function vaelgKunde(k) {
   tegnAftaler();
 }
 function nulstilKunde() {
-  S.kunde = null; S.aftaler = null; S.aftale = null;
+  S.kunde = null; S.aftaler = null; S.valgte = [];
   // Svarene hører til den forrige kunde, så de nulstilles
   ['#stop', '#overdragelse'].forEach((s) => document.querySelectorAll(`${s} button`).forEach((b) => b.setAttribute('aria-pressed', 'false')));
   S.stop = S.overdragelse = null;
@@ -162,13 +162,15 @@ function tegnAftaler() {
     rod.innerHTML = `<p class="forhaand advarsel-lys">Kunden har ingen Genfak-aftaler i ClickUp, så der er ikke noget at opsige her. Tjek kundekortet.</p>`;
     opdaterAfhaengige(); return;
   }
-  // Én linje pr. aftale, tidligste udløb først
+  // Én linje pr. aftale, tidligste udløb først. Man kan vælge flere.
   const sorteret = [...a].sort((x, y) => (x.udloeb || Infinity) - (y.udloeb || Infinity));
-  rod.innerHTML = `<div class="aftaleliste" role="radiogroup" aria-label="Kundens aftaler">${sorteret.map((x) => {
-    const valgt = S.aftale && S.aftale.id === x.id;
+  const alleValgt = S.valgte.length === a.length;
+  rod.innerHTML = `${a.length > 1 ? `<button type="button" class="link vaelg-alle" id="vaelgAlle">${alleValgt ? 'Fravælg alle' : 'Vælg alle'}</button>` : ''}
+  <div class="aftaleliste" role="group" aria-label="Kundens aftaler">${sorteret.map((x) => {
+    const valgt = S.valgte.some((v) => v.id === x.id);
     const s = saesonKlasse(x.udloeb);
     return `<label class="aftalekort${valgt ? ' valgt' : ''}">
-      <input type="radio" name="aftale" value="${esc(x.id)}"${valgt ? ' checked' : ''}>
+      <input type="checkbox" name="aftale" value="${esc(x.id)}"${valgt ? ' checked' : ''}>
       <span class="produkter">${(x.produkter || []).map((p) => `<span class="produkt" data-farve="${gyldigFarve(p.farve)}">${esc(p.navn)}</span>`).join('') || `<b>${esc(x.navn)}</b>`}</span>
       <span class="udloeb ${s.klasse}" title="${esc(s.titel)}">${x.udloeb ? esc(kortDato(x.udloeb)) : 'Ingen udløbsdato'}</span>
       <span class="vaerdi">${esc(kr(x.vaerdi) || '')}</span>
@@ -176,17 +178,24 @@ function tegnAftaler() {
     </label>`;
   }).join('')}</div>`;
   rod.querySelectorAll('.produkt').forEach((el) => { el.style.background = el.dataset.farve; el.style.color = tekstfarve(el.dataset.farve); });
-  rod.querySelectorAll('input[name=aftale]').forEach((r) => r.addEventListener('change', () => {
-    S.aftale = a.find((x) => x.id === r.value) || null;
-    rod.querySelectorAll('.aftalekort').forEach((k) => k.classList.toggle('valgt', k.contains(r) && r.checked));
+  rod.querySelectorAll('input[name=aftale]').forEach((cb) => cb.addEventListener('change', () => {
+    // Behold listens rækkefølge (tidligste udløb først)
+    const ider = new Set([...rod.querySelectorAll('input[name=aftale]:checked')].map((x) => x.value));
+    S.valgte = sorteret.filter((x) => ider.has(x.id));
+    cb.closest('.aftalekort').classList.toggle('valgt', cb.checked);
+    const alle = $('#vaelgAlle');
+    if (alle) alle.textContent = S.valgte.length === a.length ? 'Fravælg alle' : 'Vælg alle';
     opdaterAfhaengige();
   }));
+  const alle = $('#vaelgAlle');
+  if (alle) alle.onclick = () => { S.valgte = S.valgte.length === a.length ? [] : [...sorteret]; tegnAftaler(); };
   opdaterAfhaengige();
 }
 
-// Felter der afhænger af den valgte aftale
+// Felter der afhænger af de valgte aftaler
 const erHosting = (navn) => /^hos\+?$|hosting/i.test(String(navn).trim()); // HOS og HOS+ (ikke H0S med nul)
-const opsigerHosting = () => !!S.aftale && (S.aftale.produkter || []).some((p) => erHosting(p.navn));
+const opsigerHosting = () => S.valgte.some((a) => (a.produkter || []).some((p) => erHosting(p.navn)));
+const aftaleNavn = (a) => (a.produkter || []).map((p) => p.navn).join(', ') || a.navn;
 function opdaterAfhaengige() {
   // "Skal de have tilsendt hjemmesiden?" giver kun mening, når hosting opsiges
   const vis = opsigerHosting();
@@ -195,16 +204,26 @@ function opdaterAfhaengige() {
     S.overdragelse = null;
     document.querySelectorAll('#overdragelse button').forEach((b) => b.setAttribute('aria-pressed', 'false'));
   }
-  // Vis udløbsdatoen på "Ved udløb af aftalen"
-  const d = S.aftale && dato(S.aftale.udloeb);
-  $('#stop [data-v="udloeb"]').textContent = d ? `Ved udløb af aftalen (${d})` : 'Ved udløb af aftalen';
+  // Én aftale: vis dens udløbsdato på knappen. Flere: hver udløber på sin egen dato.
+  const en = S.valgte.length === 1 && dato(S.valgte[0].udloeb);
+  $('#stop [data-v="nu"]').textContent = S.valgte.length > 1 ? 'Nu (alle aftaler)' : 'Nu';
+  $('#stop [data-v="udloeb"]').textContent = S.valgte.length > 1 ? 'Ved udløb (hver sin dato)' : en ? `Ved udløb af aftalen (${en})` : 'Ved udløb af aftalen';
   opdaterStopTekst();
 }
+// Nu = alle valgte aftaler stopper nu. Ved udløb = hver aftale stopper på sin egen udløbsdato.
 function opdaterStopTekst() {
   const t = $('#stopTekst');
   if (!S.stop) { t.classList.add('skjult'); return; }
-  const d = S.aftale && dato(S.aftale.udloeb);
-  t.textContent = S.stop === 'nu' ? 'Kunden stopper med det samme.' : `Kunden kører videre til aftalens udløb${d ? ` den ${d}` : ''}.`;
+  const flere = S.valgte.length > 1;
+  if (S.stop === 'nu') {
+    t.textContent = flere ? `Alle ${S.valgte.length} aftaler stopper med det samme.` : 'Kunden stopper med det samme.';
+  } else if (flere) {
+    t.innerHTML = 'Hver aftale kører videre til sin egen udløbsdato:<br>' +
+      S.valgte.map((a) => `${esc(aftaleNavn(a))}: ${a.udloeb ? esc(dato(a.udloeb)) : 'ingen udløbsdato'}`).join('<br>');
+  } else {
+    const d = S.valgte[0] && dato(S.valgte[0].udloeb);
+    t.textContent = `Kunden kører videre til aftalens udløb${d ? ` den ${d}` : ''}.`;
+  }
   t.classList.remove('skjult');
 }
 
@@ -250,7 +269,7 @@ $('#opsig').addEventListener('click', async () => {
   const fejl = $('#fejl'); fejl.textContent = '';
   const tjek = [
     [!S.kunde, 'Vælg kunden.'],
-    [!S.aftale, 'Vælg hvilken aftale der opsiges.'],
+    [!S.valgte.length, 'Vælg hvilke aftaler der opsiges.'],
     [!S.stop, 'Vælg hvornår kunden stopper.'],
     [opsigerHosting() && !S.overdragelse, 'Vælg om kunden skal have tilsendt hjemmesiden.'],
   ].find(([b]) => b);
@@ -259,7 +278,7 @@ $('#opsig').addEventListener('click', async () => {
   const knap = $('#opsig'); knap.disabled = true; knap.textContent = 'Opsiger…';
   const data = {
     kundeId: S.kunde.id,
-    aftaleId: S.aftale.id,
+    aftaleIder: S.valgte.map((a) => a.id),
     stop: S.stop, // 'nu' eller 'udloeb'
     // null = hosting opsiges ikke, så spørgsmålet er ikke stillet
     tilsendHjemmeside: opsigerHosting() ? S.overdragelse === 'ja' : null,
@@ -278,15 +297,12 @@ $('#opsig').addEventListener('click', async () => {
 
 function visKvittering(d, data) {
   const k = $('#kvittering');
-  const a = S.aftale;
-  const udloeb = dato(a.udloeb);
   k.innerHTML = `
     ${$('.logo').outerHTML}
     <h1>Opsigelsen er registreret</h1>
     <ul class="fakta">
       <li><b>Kunde:</b> ${esc(S.kunde.navn)}</li>
-      <li><b>Aftale:</b> ${esc((a.produkter || []).map((p) => p.navn).join(', ') || a.navn)}</li>
-      <li><b>Stopper:</b> ${data.stop === 'nu' ? 'Nu' : `Ved udløb af aftalen${udloeb ? ` (${udloeb})` : ''}`}</li>
+      ${S.valgte.map((a) => `<li><b>${esc(aftaleNavn(a))}:</b> stopper ${data.stop === 'nu' ? 'nu' : a.udloeb ? `ved udløb ${esc(dato(a.udloeb))}` : 'ved udløb (ingen dato i ClickUp)'}</li>`).join('')}
       ${data.tilsendHjemmeside === null ? '' : `<li><b>Tilsend hjemmesiden:</b> ${data.tilsendHjemmeside ? 'Ja' : 'Nej'}</li>`}
     </ul>
     <div class="knapper">

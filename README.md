@@ -10,9 +10,9 @@ Ligger på https://opsigelse.leksione.dk og kræver login med en best-one.dk Goo
 ## Flow
 
 1. Vælg kunden (søgning i Kunder-listen).
-2. Vælg én Genfak-aftale. Én aftale = én opsigelse.
-3. Hvornår kunden stopper (nu / ved udløb) og, hvis aftalen indeholder HOS,
-   om kunden skal have tilsendt hjemmesiden.
+2. Vælg én eller flere Genfak-aftaler.
+3. Hvornår kunden stopper: "Nu" = alle valgte aftaler stopper nu. "Ved udløb" = hver aftale stopper på sin egen
+   udløbsdato (feltet Deadline). Er HOS med, spørges der om kunden skal have tilsendt hjemmesiden.
 4. "Opsig".
 
 ## Test lokalt
@@ -32,3 +32,14 @@ Koden ligger i `worker/worker.js` og sættes ind i Cloudflare-workeren `opsigels
 - Ingen cron-trigger nødvendig.
 
 Lige nu skriver "Opsig" kun en kommentar på kundeopgaven. Automatiseringerne i ClickUp kommer bagefter.
+
+## Workerens API
+
+| Kald | Svar |
+|---|---|
+| `POST /api/login` `{ credential }` | `{ token, navn, email, billede, exp }`. Googles signatur tjekkes, og `hd` skal være `best-one.dk`. |
+| `GET /api/kunder` | `[{ id, navn, domaene, status, url }]` |
+| `GET /api/aftaler?kunde=<id>` | `[{ id, navn, produkter: [{ navn, farve }], vaerdi, udloeb, url }]` (kundens Genfak-underopgaver) |
+| `POST /api/opsig` `{ kundeId, aftaleIder: [...], stop: 'nu' \| 'udloeb', tilsendHjemmeside }` | `{ ok, antal }` |
+
+Fejl svares som `{ fejl, kode }` med fejlkoder `OF-xxx`.
