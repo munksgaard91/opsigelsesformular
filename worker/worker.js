@@ -180,11 +180,11 @@ async function cu(env, path, opts = {}) {
     const msg = typeof data === 'string' ? data : `${data.err || ''} ${data.ECODE || ''}`.trim() || JSON.stringify(data);
     const detalje = `ClickUp ${res.status} ${path.split('?')[0]}: ${msg}`;
     const ecode = (data && data.ECODE) || '';
-    if (res.status === 401 && /OAUTH_01[789]|OAUTH_025|token/i.test(ecode + msg)) throw fejl('Formularen kan ikke logge ind i ClickUp.', 502, 'OF-301', detalje);
-    if (res.status === 401 || res.status === 403 || res.status === 404) throw fejl('Formularen har ikke adgang til opgaven i ClickUp.', 502, 'OF-302', detalje);
-    if (res.status === 429) throw fejl('ClickUp har for travlt lige nu. Prøv igen om et minut.', 503, 'OF-304', detalje);
-    if (res.status >= 500) throw fejl('ClickUp svarer ikke lige nu. Prøv igen om lidt.', 503, 'OF-305', detalje);
-    throw fejl('ClickUp afviste opsigelsen.', 502, 'OF-303', detalje);
+    if (res.status === 401 && /OAUTH_01[789]|OAUTH_025|token/i.test(ecode + msg)) throw fejl('Formularen kan ikke logge ind i BestCRM.', 502, 'OF-301', detalje);
+    if (res.status === 401 || res.status === 403 || res.status === 404) throw fejl('Formularens bruger har ikke rettighed til opgaven i BestCRM.', 502, 'OF-302', detalje);
+    if (res.status === 429) throw fejl('BestCRM har for travlt lige nu. Prøv igen om et minut.', 503, 'OF-304', detalje);
+    if (res.status >= 500) throw fejl('BestCRM svarer ikke lige nu. Prøv igen om lidt.', 503, 'OF-305', detalje);
+    throw fejl('BestCRM afviste opsigelsen.', 502, 'OF-303', detalje);
   }
   return data;
 }
@@ -452,7 +452,13 @@ async function opsig(env, bruger, b) {
   const tagResultat = await Promise.allSettled(valgte.map((a) => cu(env, tagSti(a.id), { method: 'POST' })));
   const tagFejl = valgte.filter((_, i) => tagResultat[i].status === 'rejected');
   tagResultat.forEach((r, i) => r.status === 'rejected' && console.error('OF-306', valgte[i].id, r.reason.detalje || r.reason.message));
-  if (tagFejl.length === valgte.length) throw fejl('Aftalerne kunne ikke markeres som opsagt i ClickUp. Intet er ændret.', 502, 'OF-306', tagResultat[0].reason.detalje);
+  if (tagFejl.length === valgte.length) {
+    // Mangler formularens bruger rettigheder, siges det direkte, så det ikke ligner en midlertidig fejl
+    const rettighed = tagResultat.every((r) => r.reason && r.reason.kode === 'OF-302');
+    throw fejl(rettighed
+      ? 'Formularens bruger i BestCRM har ikke rettighed til at ændre aftalerne (kræver "Can edit" på Kunder-listen). Intet er ændret.'
+      : 'Aftalerne kunne ikke markeres som opsagt i BestCRM. Intet er ændret.', 502, 'OF-306', tagResultat[0].reason.detalje);
+  }
 
   // Kommentar i hovedopgaven (kunden), efter ledelsens skabelon:
   //   Følgende produkter er opsagt:
