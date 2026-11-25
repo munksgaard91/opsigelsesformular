@@ -510,16 +510,22 @@ async function opsig(env, bruger, b) {
     const [y, m, d] = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Copenhagen' }).format(new Date(+ms)).split('-').map(Number);
     return `${d}. ${['januar', 'februar', 'marts', 'april', 'maj', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'december'][m - 1]} ${y}`;
   };
+  const stopTekst = b.stop === 'nu' ? `Med det samme (${datoDK(Date.now())})` : 'Ved udløb af hver aftale';
+  const stopperAftale = (a) => (b.stop === 'nu' ? 'Med det samme' : a.udloeb ? datoDK(a.udloeb) : 'Ingen udløbsdato i BestCRM');
+  const udleveres = hosting ? (b.tilsendHjemmeside ? 'Ja' : 'Nej') : null;
+  // Tekstudgave: bruges som reserve, hvis mailprogrammet ikke viser HTML
   const mailTekst = [
     `${info.navn} har opsagt følgende produkter`,
-    ...valgte.map((a) => (b.stop === 'nu' ? navn(a) : `${navn(a)}: stopper ved udløb ${a.udloeb ? datoDK(a.udloeb) : '(ingen udløbsdato i BestCRM)'}`)),
+    ...valgte.map((a) => (b.stop === 'nu' ? navn(a) : `${navn(a)}: stopper ved udløb ${stopperAftale(a)}`)),
     '',
-    b.stop === 'nu' ? `Kunden stopper med det samme (${datoDK(Date.now())})` : 'Kunden stopper ved udløb af hver aftale',
+    `Kunden stopper: ${stopTekst}`,
+    ...(udleveres ? [`Hjemmesiden skal udleveres: ${udleveres}`] : []),
     '',
     `Link til BestCRM: ${info.url}`,
     `Opsigelsen er oprettet af ${bruger.navn}`,
   ].join('\n');
-  const mailFejl = await sendMail(env, { emne, tekst: mailTekst, svarTil: bruger.email });
+  const mailHtml = byggMailHtml({ kunde: info.navn, url: info.url, valgte, stopperAftale, stopTekst, udleveres, bruger: bruger.navn });
+  const mailFejl = await sendMail(env, { emne, tekst: mailTekst, html: mailHtml, svarTil: bruger.email });
 
   const underskrift = mailFejl
     ? `Opsigelsen er oprettet af ${bruger.navn}. OBS: Mailen til bogholderiet kunne ikke sendes, giv dem besked.`
@@ -574,7 +580,7 @@ async function kundeInfo(env, kundeId) {
 }
 
 // Sender mailen via Google Apps Script. Returnerer null, hvis den blev sendt, ellers en fejlkode.
-async function sendMail(env, { emne, tekst, svarTil }) {
+async function sendMail(env, { emne, tekst, html, svarTil }) {
   if (!env.MAIL_URL || !env.MAIL_SECRET) {
     console.error('OF-308', 'MAIL_URL eller MAIL_SECRET mangler');
     return 'OF-308';
@@ -583,7 +589,7 @@ async function sendMail(env, { emne, tekst, svarTil }) {
     const r = await fetch(env.MAIL_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hemmelighed: env.MAIL_SECRET, emne, tekst, svarTil }),
+      body: JSON.stringify({ hemmelighed: env.MAIL_SECRET, emne, tekst, html, svarTil }),
       redirect: 'follow', // Apps Script svarer via en omdirigering
     });
     const d = await r.json().catch(() => null);
@@ -593,4 +599,64 @@ async function sendMail(env, { emne, tekst, svarTil }) {
     console.error('OF-309', e.message);
     return 'OF-309';
   }
+}
+
+// ---------- HTML-mail til bogholderiet ----------
+// Bygget med tabeller og inline-styles, så den ser ens ud i Gmail, Outlook og Apple Mail.
+const htmlEsc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function mailTekstfarve(hex) {
+  const h = String(hex || '').replace('#', '');
+  const f = h.length === 3 ? h.split('').map((c) => c + c).join('') : h.padEnd(6, '0');
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(f.slice(i, i + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.6 ? '#1c2733' : '#ffffff';
+}
+function byggMailHtml({ kunde, url, valgte, stopperAftale, stopTekst, udleveres, bruger }) {
+  const font = "font-family:Montserrat,Arial,Helvetica,sans-serif;";
+  const chip = (p) => {
+    const bg = /^#[0-9a-f]{3,6}$/i.test(p.farve || '') ? p.farve : '#e9e9e9';
+    return `<span style="display:inline-block;background:${bg};color:${mailTekstfarve(bg)};border-radius:4px;padding:3px 7px;margin:2px 4px 2px 0;font-size:12px;font-weight:bold;${font}">${htmlEsc(p.navn)}</span>`;
+  };
+  const raekker = valgte.map((a) => `
+          <tr>
+            <td style="padding:12px;border-bottom:1px solid #e6ebf0;">${a.produkter.length ? a.produkter.map(chip).join('') : htmlEsc(a.navn)}</td>
+            <td style="padding:12px;border-bottom:1px solid #e6ebf0;text-align:right;font-size:13px;color:#1c2733;${font}">${htmlEsc(stopperAftale(a))}</td>
+          </tr>`).join('');
+  const fornavn = String(bruger || '').split(/\s+/)[0] || bruger;
+  return `<!doctype html>
+<html lang="da"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f6f8;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;"><tr><td align="center" style="padding:24px 12px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #dfe5eb;border-radius:12px;border-collapse:separate;overflow:hidden;${font}color:#1c2733;">
+    <tr><td style="background:#b3262d;padding:20px 24px;border-radius:12px 12px 0 0;">
+      <div style="font-size:12px;color:#f7d6d8;${font}">Opsigelse</div>
+      <div style="font-size:20px;font-weight:bold;color:#ffffff;margin-top:4px;${font}">${htmlEsc(kunde)}</div>
+    </td></tr>
+    <tr><td style="padding:22px 24px 8px;">
+      <p style="margin:0 0 14px;font-size:14px;line-height:1.6;${font}">Kunden har opsagt følgende produkter:</p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+        <tr style="background:#f4f6f8;">
+          <td style="padding:8px 12px;font-size:12px;color:#5d6b7a;${font}">Produkt</td>
+          <td style="padding:8px 12px;font-size:12px;color:#5d6b7a;text-align:right;${font}">Stopper</td>
+        </tr>${raekker}
+      </table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:18px;background:#fdecec;border-radius:8px;border-collapse:separate;">
+        <tr>
+          <td style="padding:12px 14px ${udleveres ? '6px' : '12px'};font-size:13px;color:#791f1f;${font}">Kunden stopper</td>
+          <td style="padding:12px 14px ${udleveres ? '6px' : '12px'};font-size:13px;color:#791f1f;text-align:right;font-weight:bold;${font}">${htmlEsc(stopTekst)}</td>
+        </tr>${udleveres ? `
+        <tr>
+          <td style="padding:6px 14px 12px;font-size:13px;color:#791f1f;${font}">Hjemmesiden skal udleveres</td>
+          <td style="padding:6px 14px 12px;font-size:13px;color:#791f1f;text-align:right;font-weight:bold;${font}">${htmlEsc(udleveres)}</td>
+        </tr>` : ''}
+      </table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 0 8px;">
+        <a href="${htmlEsc(url)}" style="display:inline-block;background:#225581;color:#ffffff;text-decoration:none;border-radius:999px;padding:11px 22px;font-size:14px;font-weight:bold;${font}">Åbn kunden i BestCRM</a>
+      </td></tr></table>
+    </td></tr>
+    <tr><td style="padding:14px 24px 20px;border-top:1px solid #e6ebf0;font-size:12px;line-height:1.6;color:#5d6b7a;${font}">
+      Opsigelsen er oprettet af ${htmlEsc(bruger)}.<br>Svar på mailen går direkte til ${htmlEsc(fornavn)}.
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>`;
 }

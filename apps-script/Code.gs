@@ -26,6 +26,8 @@ function doPost(e) {
   if (!d.emne || !d.tekst) return svar({ ok: false, fejl: 'Emne eller tekst mangler' });
 
   const valg = { name: 'BestCRM' };
+  // HTML-udgaven vises i Gmail; teksten bruges, hvis mailprogrammet ikke viser HTML
+  if (d.html) valg.htmlBody = String(d.html).slice(0, 200000);
   // Svar går til den medarbejder der lavede opsigelsen
   if (/^[^\s@]+@best-one\.dk$/i.test(String(d.svarTil || ''))) valg.replyTo = d.svarTil;
 
