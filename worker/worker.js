@@ -19,6 +19,7 @@ const CFG = {
   GENFAK_TYPE_ID: 1008,         // opgavetypen "Genfak" = én aftale
   TEAM_ID: '42640437',
   HJEMMESIDE_ADMIN: 'Hjemmeside Admin', // brugergruppe i ClickUp; slås op på navnet
+  HJEMMESIDE_ADMIN_AKTIV: false,        // slået fra efter ønske (2026-11-25): gruppen tilføjes aldrig
   TAG_OPSAGT: '🪦',             // findes i forvejen i ClickUp; sættes på opsagte Genfak-opgaver ved siden af "udløber xx/yy"
   CACHE_MINUTTER: 10,
   CLICKUP_URL: 'https://bestcrm.clickup.com',
@@ -345,7 +346,7 @@ async function aftaler(env, kundeId) {
 // 1. Hver valgt Genfak-opgave får tagget 🪦 (de andre tags, fx "udløber 26/27", bliver stående).
 // 2. Mail til bogholderiet (via Google Apps Script, se apps-script/Code.gs).
 // 3. En samlet kommentar skrives på kundeopgaven (hovedopgaven).
-// 4. Ved rene hosting-opsigelser (HOS/H0S/HOS+) tilføjes "Hjemmeside Admin" som assignee på hovedopgaven.
+// 4. (Slået fra) Ved rene hosting-opsigelser (HOS/H0S/HOS+) tilføjes "Hjemmeside Admin" som assignee på hovedopgaven.
 // 5. Har hovedopgaven ingen due date, får den en (samme regel som supportformularen).
 
 // Hostingaftaler med hjemmeside, behandles ens overalt:
@@ -473,7 +474,7 @@ async function opsig(env, bruger, b) {
   ];
   // Hjemmeside Admin (fejler det, fortsætter opsigelsen og det vises i kvitteringen)
   let adminTilfoejet = false, adminFejl = null;
-  if (skalHaveHjemmesideAdmin(valgte, opgaver.map((o) => tilAftale(o, reserve)))) {
+  if (CFG.HJEMMESIDE_ADMIN_AKTIV && skalHaveHjemmesideAdmin(valgte, opgaver.map((o) => tilAftale(o, reserve)))) {
     try {
       const gruppe = await hjemmesideAdminId(env);
       await cu(env, `/task/${kunde.id}`, { method: 'PUT', body: JSON.stringify({ group_assignees: { add: [gruppe], rem: [] } }) });
