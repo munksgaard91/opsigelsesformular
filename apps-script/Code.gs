@@ -29,9 +29,11 @@ function doPost(e) {
   // HTML-udgaven vises i Gmail; teksten bruges, hvis mailprogrammet ikke viser HTML
   if (d.html) valg.htmlBody = String(d.html).slice(0, 200000);
   // Svar går til den medarbejder der lavede opsigelsen
-  if (/^[^\s@]+@best-one\.dk$/i.test(String(d.svarTil || ''))) valg.replyTo = d.svarTil;
+  const svarTil = String(d.svarTil || '');
+  if (/^[^\s@,;]+@best-one\.dk$/i.test(svarTil)) valg.replyTo = svarTil;
 
-  GmailApp.sendEmail(til, String(d.emne).slice(0, 250), String(d.tekst), valg);
+  const emne = String(d.emne).replace(/[\r\n]+/g, ' ').slice(0, 250);
+  GmailApp.sendEmail(til, emne, String(d.tekst).slice(0, 20000), valg);
   return svar({ ok: true });
 }
 

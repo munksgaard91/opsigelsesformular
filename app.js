@@ -162,7 +162,7 @@ function nulstilKunde() {
 }
 
 // ---------- Aftaler (Genfak-opgaver) ----------
-const gyldigFarve = (f) => (/^#[0-9a-f]{3,6}$/i.test(f) ? f : '#e9e9e9');
+const gyldigFarve = (f) => (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(f) ? f : '#e9e9e9');
 function tekstfarve(hex) {
   const h = String(hex).replace('#', '');
   const f = h.length === 3 ? h.split('').map((c) => c + c).join('') : h.padEnd(6, '0');
@@ -315,7 +315,8 @@ $('#opsig').addEventListener('click', async () => {
     AFTALE_CACHE.delete(data.kundeId); // kundens aftaler kan have ændret sig
     visKvittering(d, data, sendt);
   } catch (e) {
-    const brugerfejl = ['OF-400', 'OF-401', 'OF-402'].includes(e.kode);
+    // Brugerfejl og opsætningsfejl: "prøv igen" hjælper ikke
+    const brugerfejl = ['OF-400', 'OF-401', 'OF-402', 'OF-313', 'OF-203'].includes(e.kode);
     fejl.textContent = visFejl(e) + (brugerfejl ? '' : ' Prøv igen, eller giv besked med fejlkoden, hvis det fortsætter.');
     // Aftalerne har ændret sig siden de blev hentet: hent dem på ny i stedet for at bede om genindlæsning
     if (['OF-401', 'OF-402'].includes(e.kode) && S.kunde && S.kunde.id === data.kundeId) {

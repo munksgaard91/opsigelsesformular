@@ -33,7 +33,7 @@ const CFG = {
 };
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url);
     try {
       if (req.method === 'OPTIONS') return svar(null, 204);
@@ -54,7 +54,10 @@ export default {
         return svar(await medKode('OF-202', 'Aftalerne kunne ikke hentes.', () => aftaler(env, url.searchParams.get('kunde'))), 200);
       }
       if (url.pathname === '/api/opsig' && req.method === 'POST') {
-        return svar(await opsig(env, bruger, (await req.json().catch(() => null)) || {}), 200);
+        // Opsigelsen gøres færdig, selv hvis fanen lukkes undervejs
+        const arbejde = opsig(env, bruger, (await req.json().catch(() => null)) || {});
+        if (ctx && ctx.waitUntil) ctx.waitUntil(arbejde.catch(() => {}));
+        return svar(await arbejde, 200);
       }
       return svar({ fejl: 'Siden findes ikke', kode: 'OF-901' }, 404);
     } catch (e) {
@@ -182,7 +185,7 @@ async function cu(env, path, opts = {}) {
     const detalje = `ClickUp ${res.status} ${path.split('?')[0]}: ${msg}`;
     const ecode = (data && data.ECODE) || '';
     if (res.status === 401 && /OAUTH_01[789]|OAUTH_025|token/i.test(ecode + msg)) throw fejl('Formularen kan ikke logge ind i BestCRM.', 502, 'OF-301', detalje);
-    if (res.status === 401 || res.status === 403 || res.status === 404) throw fejl('Formularens bruger har ikke rettighed til opgaven i BestCRM.', 502, 'OF-302', detalje);
+    if (res.status === 401 || res.status === 403 || res.status === 404) throw Object.assign(fejl('Formularens bruger har ikke rettighed til opgaven i BestCRM.', 502, 'OF-302', detalje), { cuStatus: res.status });
     if (res.status === 429) throw fejl('BestCRM har for travlt lige nu. Prøv igen om et minut.', 503, 'OF-304', detalje);
     if (res.status >= 500) throw fejl('BestCRM svarer ikke lige nu. Prøv igen om lidt.', 503, 'OF-305', detalje);
     throw fejl('BestCRM afviste opsigelsen.', 502, 'OF-303', detalje);
@@ -302,7 +305,7 @@ const erGenfak = (t, kundeId) => t.parent === kundeId && t.custom_item_id === CF
 async function genfakOpgaver(env, kundeId) {
   if (!/^[a-z0-9]+$/i.test(String(kundeId || ''))) throw fejl('Ukendt kunde.', 400, 'OF-400');
   try {
-    const d = await cu(env, `/list/${CFG.KUNDER_LIST}/task?parent=${kundeId}&subtasks=true&include_closed=true&archived=false`);
+    const d = await cu(env, `/list/${CFG.KUNDER_LIST}/task?parent=${kundeId}&subtasks=true&include_closed=true&archived=false&custom_items[]=${CFG.GENFAK_TYPE_ID}`);
     const tasks = d.tasks || [];
     // Kun hvis ClickUp faktisk har filtreret på kunden og svaret ikke er afkortet (100 pr. side)
     const filtreret = tasks.length > 0 && tasks.length < 100 && tasks.every((t) => t.parent === kundeId);
@@ -322,6 +325,8 @@ async function genfakOpgaverLangsomt(env, kundeId) {
     // Mangler typen i oversigten, hentes opgaven alligevel og filtreres nedenfor
     .filter((s) => (s.custom_item_id === undefined || s.custom_item_id === CFG.GENFAK_TYPE_ID) && !(s.status && s.status.type === 'closed'))
     .map((s) => s.id);
+  // Loft, så en kunde med mange underopgaver ikke sprænger Cloudflares grænse for kald pr. forespørgsel
+  if (ids.length > 40) throw fejl('Kunden har for mange underopgaver til at blive hentet. Giv besked til den ansvarlige for opsigelsesformularen.', 502, 'OF-203', `${ids.length} underopgaver`);
   const opgaver = await Promise.all(ids.map((id) => cu(env, `/task/${id}`)));
   // Kun opgaver der stadig er Genfak og hører til kunden
   return { kunde, opgaver: opgaver.filter((o) => erGenfak(o, kunde.id)) };
@@ -455,10 +460,9 @@ async function opsig(env, bruger, b) {
   tagResultat.forEach((r, i) => r.status === 'rejected' && console.error('OF-306', valgte[i].id, r.reason.detalje || r.reason.message));
   if (tagFejl.length === valgte.length) {
     // Mangler formularens bruger rettigheder, siges det direkte, så det ikke ligner en midlertidig fejl
-    const rettighed = tagResultat.every((r) => r.reason && r.reason.kode === 'OF-302');
-    throw fejl(rettighed
-      ? 'Formularens bruger i BestCRM har ikke rettighed til at ændre aftalerne (kræver "Can edit" på Kunder-listen). Intet er ændret.'
-      : 'Aftalerne kunne ikke markeres som opsagt i BestCRM. Intet er ændret.', 502, 'OF-306', tagResultat[0].reason.detalje);
+    const rettighed = tagResultat.every((r) => r.reason && [401, 403].includes(r.reason.cuStatus));
+    if (rettighed) throw fejl('Formularens bruger i BestCRM mangler rettigheder til aftalerne. Intet er ændret. Giv besked til den ansvarlige for opsigelsesformularen.', 502, 'OF-313', tagResultat[0].reason.detalje);
+    throw fejl('Aftalerne kunne ikke markeres som opsagt i BestCRM. Intet er ændret.', 502, 'OF-306', tagResultat[0].reason.detalje);
   }
 
   // Kommentar i hovedopgaven (kunden), efter ledelsens skabelon:
@@ -614,7 +618,7 @@ function mailTekstfarve(hex) {
 function byggMailHtml({ kunde, url, valgte, stopperAftale, stopTekst, udleveres, bruger }) {
   const font = "font-family:Montserrat,Arial,Helvetica,sans-serif;";
   const chip = (p) => {
-    const bg = /^#[0-9a-f]{3,6}$/i.test(p.farve || '') ? p.farve : '#e9e9e9';
+    const bg = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(p.farve || '') ? p.farve : '#e9e9e9';
     return `<span style="display:inline-block;background:${bg};color:${mailTekstfarve(bg)};border-radius:4px;padding:3px 7px;margin:2px 4px 2px 0;font-size:12px;font-weight:bold;${font}">${htmlEsc(p.navn)}</span>`;
   };
   const raekker = valgte.map((a) => `
@@ -623,11 +627,12 @@ function byggMailHtml({ kunde, url, valgte, stopperAftale, stopTekst, udleveres,
             <td style="padding:12px;border-bottom:1px solid #e6ebf0;text-align:right;font-size:13px;color:#1c2733;${font}">${htmlEsc(stopperAftale(a))}</td>
           </tr>`).join('');
   const fornavn = String(bruger || '').split(/\s+/)[0] || bruger;
+  if (!/^https:\/\//i.test(String(url || ''))) url = CFG.CLICKUP_URL;
   return `<!doctype html>
 <html lang="da"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#f4f6f8;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;"><tr><td align="center" style="padding:24px 12px;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #dfe5eb;border-radius:12px;border-collapse:separate;overflow:hidden;${font}color:#1c2733;">
+  <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="width:100%;max-width:560px;background:#ffffff;border:1px solid #dfe5eb;border-radius:12px;border-collapse:separate;overflow:hidden;${font}color:#1c2733;">
     <tr><td style="background:#b3262d;padding:20px 24px;border-radius:12px 12px 0 0;">
       <div style="font-size:12px;color:#f7d6d8;${font}">Opsigelse</div>
       <div style="font-size:20px;font-weight:bold;color:#ffffff;margin-top:4px;${font}">${htmlEsc(kunde)}</div>
